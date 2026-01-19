@@ -26,7 +26,7 @@ function writeJsonSafe(filePath, data) {
     return true;
   } catch (e) {
     console.error("JSON write error:", e);
-    return false;
+    return false;    
   }
 }
 
