@@ -1,170 +1,115 @@
-// server.js
-// -------------------------------------------------------------
-// Purpose:
-// - Expose endpoints for your MT5 EA to poll trade signals,
-//   check balance, and place manual orders.
-// - Restrict trading to major forex pairs only.
-// - Return consistently valid JSON to avoid parsing errors.
-// -------------------------------------------------------------
-
 import express from "express";
-import bodyParser from "body-parser";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { config } from "./config.js";
+import { runDetection } from "./src/patternDetection/patternEngine.js";
 
-// Import your broker connector functions (you already have these)
-import { executeTrade, getBalance, placeOrder } from "./src/executionModule/brokerConnector.js";
-
-// -------------------------------------------------------------
-// Setup: resolve __dirname for ES modules
-// -------------------------------------------------------------
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// -------------------------------------------------------------
-// App and port
-// -------------------------------------------------------------
 const app = express();
 const PORT = 3001;
 
-// -------------------------------------------------------------
-// Middleware: parse JSON bodies safely
-// - bodyParser.json() ensures req.body is already an object.
-// - Do NOT call JSON.parse(req.body) later—it's already parsed.
-// -------------------------------------------------------------
-app.use(bodyParser.json());
+app.use(express.json({ limit: "100mb" }));
 
-// -------------------------------------------------------------
-// File path for signals/logs
-// - This file is expected to contain an array of trade objects.
-// - Example object:
-//   { "type":"buy", "pair":"EURUSD", "sl":1.0920, "tp":1.1010, "lot":0.1 }
-// -------------------------------------------------------------
-const logPath = path.resolve(__dirname, "./closedTrades.json");
+const signalsPath = path.resolve(__dirname, "signals.json");
+const historyPath = path.resolve(__dirname, "history.json");
 
-// -------------------------------------------------------------
-// Whitelist: major forex pairs only
-// - The EA should only trade these pairs.
-// -------------------------------------------------------------
-const MAJOR_PAIRS = ["EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD"];
+const loadJSON = (f) => { 
+    try { 
+        if (!fs.existsSync(f)) return [];
+        return JSON.parse(fs.readFileSync(f, "utf-8")); 
+    } catch { return []; } 
+};
+const saveJSON = (f, d) => fs.writeFileSync(f, JSON.stringify(d, null, 2));
 
-// -------------------------------------------------------------
-// Helper: safe JSON file read
-// - Returns [] if file missing or invalid.
-// -------------------------------------------------------------
-function readTradesFileSafe(filePath) {
-  try {
-    if (!fs.existsSync(filePath)) return [];
-    const raw = fs.readFileSync(filePath, "utf-8");
-    if (!raw || raw.trim() === "") return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (err) {
-    console.error("Failed to read/parse trades file:", err);
-    return [];
-  }
+function calculateLotSize(balance, entry, sl, symbol) {
+    const riskAmount = balance * (config.riskPercent / 100);
+    const isJpy = symbol.includes("JPY");
+    const pipSize = isJpy ? 0.01 : 0.0001;
+    const slPips = Math.abs(entry - sl) / pipSize;
+    if (slPips <= 1) return 0.01;
+    let lots = riskAmount / (slPips * 10); 
+    return Math.max(0.01, Math.round(lots * 100) / 100);
 }
 
-// -------------------------------------------------------------
-// GET /execute
-// - EA polls this endpoint for the latest signal.
-// - We return a consistent JSON shape:
-//   { action, symbol, sl, tp, lot } or { action: null }
-// - We filter to major pairs only.
-// -------------------------------------------------------------
-app.get("/execute", async (req, res) => {
-  try {
-    const trades = readTradesFileSafe(logPath);
-    const lastTrade = trades.length ? trades[trades.length - 1] : null;
+app.post("/candles", (req, res) => {
+    try {
+        const { candleData, symbol } = req.body;
+        if (!candleData || !symbol) return res.json({ status: "waiting" });
 
-    if (
-      lastTrade &&
-      lastTrade.type &&
-      lastTrade.pair &&
-      MAJOR_PAIRS.includes(lastTrade.pair)
-    ) {
-      return res.json({
-        action: lastTrade.type,   // "buy" or "sell"
-        symbol: lastTrade.pair,   // e.g. "USDJPY"
-        sl: Number(lastTrade.sl),
-        tp: Number(lastTrade.tp),
-        lot: Number(lastTrade.lot) || 0.1,
-      });
-    }
+        const getDir = (tf) => {
+            const d = candleData[tf];
+            return (d && d.length > 1 && d[0].close > d[1].close) ? "buy" : "sell";
+        };
 
-    // No signal → return EMPTY payload
-    return res.json({});
-  } catch (err) {
-    console.error("Error in /execute:", err);
-    res.status(500).json({ error: "Server error" });
-  }
+        const t = { w: getDir("1W"), d: getDir("1D"), h4: getDir("4H"), h1: getDir("1H") };
+        const buyPoints = Object.values(t).filter(v => v === "buy").length;
+        const sellPoints = Object.values(t).filter(v => v === "sell").length;
+
+        let bias = buyPoints >= 3 ? "buy" : sellPoints >= 3 ? "sell" : "none";
+        
+        // --- ADD THESE LOGS HERE ---
+        console.log(`📡 [${symbol}] Trends: W1:${t.w}, D1:${t.d}, H4:${t.h4}, H1:${t.h1}`);
+        console.log(`📊 Score: Buy ${buyPoints}/4, Sell ${sellPoints}/4 | Bias: ${bias.toUpperCase()}`);
+        // ---------------------------
+
+        if (bias === "none") return res.json({ status: "Mixed Trend" });
+
+        if (bias === "none") return res.json({ status: "Mixed Trend" });
+
+        const patternTFs = ["1D", "4H", "1H"];
+        let found = null;
+        for (let tf of patternTFs) {
+            const sig = runDetection(candleData[tf], symbol);
+            if (sig && sig.type === bias) { found = { ...sig, timeframe: tf }; break; }
+        }
+
+        if (found) {
+            const signals = loadJSON(signalsPath);
+            const history = loadJSON(historyPath);
+
+            const isCooldown = history.some(h => h.pair === symbol && Date.now() - h.timestamp < 86400000);
+            const isPending = signals.some(s => s.pair === symbol && !s.executed);
+
+            if (!isCooldown && !isPending) {
+                const entry = candleData["1H"][0].close;
+                signals.push({ ...found, entryPrice: entry, executed: false, timestamp: Date.now(), pair: symbol });
+                saveJSON(signalsPath, signals);
+                console.log(`🎯 SIGNAL: ${symbol} ${found.type} added.`);
+            }
+        }
+        res.json({ status: "scanning" });
+    } catch (e) { res.json({ status: "error" }); }
 });
 
+app.get("/execute", (req, res) => {
+    let signals = loadJSON(signalsPath);
+    let history = loadJSON(historyPath);
 
-// -------------------------------------------------------------
-// GET /balance
-// - Returns account balance from your broker connector.
-// - Always returns a numeric balance (0 on error).
-// -------------------------------------------------------------
-app.get("/balance", async (req, res) => {
-  try {
-    const balance = await getBalance();
-    res.json({ balance: Number(balance) || 0 });
-  } catch (err) {
-    console.error("Error in /balance:", err);
-    res.status(500).json({ balance: 0 });
-  }
+    if (signals.some(s => s.executed === true)) return res.json({});
+
+    const idx = signals.findIndex(s => !s.executed);
+    if (idx === -1) return res.json({});
+
+    const bal = parseFloat(req.query.balance || 50);
+    const lot = calculateLotSize(bal, signals[idx].entryPrice, signals[idx].sl, signals[idx].pair);
+
+    const out = {
+        action: signals[idx].type,
+        symbol: signals[idx].pair,
+        sl: signals[idx].sl,
+        tp: signals[idx].tp,
+        lot: lot
+    };
+
+    signals[idx].executed = true;
+    history.push({ ...signals[idx], timestamp: Date.now() });
+    saveJSON(signalsPath, signals);
+    saveJSON(historyPath, history);
+
+    console.log(`💰 TRADE SENT: ${out.symbol} ${out.lot} Lots`);
+    res.json(out);
 });
 
-// -------------------------------------------------------------
-// POST /order
-// - Accepts a manual order request from external tools or EA.
-// - Validates body and forwards to placeOrder().
-// - Example body:
-//   { "action":"buy", "symbol":"EURUSD", "sl":1.0920, "tp":1.1010, "lot":0.1 }
-// -------------------------------------------------------------
-app.post("/order", async (req, res) => {
-  try {
-    // Validate presence of body
-    if (!req.body || Object.keys(req.body).length === 0) {
-      return res.status(400).json({ error: "Empty JSON body" });
-    }
-
-    const { action, symbol, sl, tp, lot } = req.body;
-
-    // Validate required fields
-    if (!action || !symbol) {
-      return res.status(400).json({ error: "Missing required fields: action or symbol" });
-    }
-
-    // Enforce major pairs only
-    if (!MAJOR_PAIRS.includes(symbol)) {
-      return res.status(400).json({ error: `Symbol ${symbol} is not a major pair` });
-    }
-
-    // Log for debugging
-    console.log("Incoming order:", req.body);
-
-    // Forward to your broker connector
-    const result = await placeOrder({
-      action: String(action).toLowerCase(), // normalize
-      symbol,
-      sl: Number(sl) || 0,
-      tp: Number(tp) || 0,
-      lot: Number(lot) || 0.1,
-    });
-
-    res.json({ status: "Order executed", result });
-  } catch (err) {
-    console.error("Error in /order:", err);
-    res.status(500).json({ error: "Execution failed" });
-  }
-});
-
-// -------------------------------------------------------------
-// Start server
-// -------------------------------------------------------------
-app.listen(PORT, () => {
-  console.log(`Broker server running on http://127.0.0.1:${PORT}`);
-});
+app.listen(PORT, "127.0.0.1", () => console.log(`🚀 Bridge Active`));

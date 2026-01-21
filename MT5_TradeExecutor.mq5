@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
-//| MT5 Trade Executor Bridge for Node.js H&S Bot                    |
-//| Polls Node.js for signals and executes trades on major pairs     |
+//| MT5 Trade Executor Bridge - Visual Pro Version                   |
+//| Features: Dynamic 20% Risk, Visual Trade Lines, Multi-TF Support |
 //+------------------------------------------------------------------+
 #property strict
 #include <Trade/Trade.mqh>
@@ -8,186 +8,167 @@
 CTrade trade;
 
 // -------------------------------------------------------------------
-// Input: Node.js endpoint for polling signals
+// Inputs
 // -------------------------------------------------------------------
-input string WebhookURL = "http://127.0.0.1:3001/execute";
+input string ExecuteURL    = "http://127.0.0.1:3001/execute";
+input string CandlesURL    = "http://127.0.0.1:3001/candles";
+input int    BarsToRequest = 50; 
 
 // -------------------------------------------------------------------
-// Helper: Send HTTP GET request to Node.js
+// Symbols & Globals
 // -------------------------------------------------------------------
-string SendRequest(string url)
+string majors[] = {"EURUSD","GBPUSD","USDJPY","USDCHF","USDCAD","AUDUSD","NZDUSD"};
+datetime lastSent = 0;
+
+// -------------------------------------------------------------------
+// Visual Logic: Drawing SL/TP/Entry Lines
+// -------------------------------------------------------------------
+void DrawTradeLines(string symbol, double entry, double sl, double tp)
 {
-   char result[];
-   char data[];        
-   string headers = ""; 
-   int timeout = 5000; 
+   // Clean up existing lines first
+   ObjectDelete(0, "HS_EntryLine");
+   ObjectDelete(0, "HS_SLLine");
+   ObjectDelete(0, "HS_TPLine");
+
+   // Entry Line (Green)
+   ObjectCreate(0, "HS_EntryLine", OBJ_HLINE, 0, 0, entry);
+   ObjectSetInteger(0, "HS_EntryLine", OBJPROP_COLOR, clrGreen);
+   ObjectSetInteger(0, "HS_EntryLine", OBJPROP_WIDTH, 2);
+   ObjectSetString(0, "HS_EntryLine", OBJPROP_TEXT, "H&S Entry");
+
+   // Stop Loss Line (Red - Dashed)
+   ObjectCreate(0, "HS_SLLine", OBJ_HLINE, 0, 0, sl);
+   ObjectSetInteger(0, "HS_SLLine", OBJPROP_COLOR, clrRed);
+   ObjectSetInteger(0, "HS_SLLine", OBJPROP_STYLE, STYLE_DASH);
+   ObjectSetInteger(0, "HS_SLLine", OBJPROP_WIDTH, 1);
+
+   // Take Profit Line (Green - Solid)
+   ObjectCreate(0, "HS_TPLine", OBJ_HLINE, 0, 0, tp);
+   ObjectSetInteger(0, "HS_TPLine", OBJPROP_COLOR, clrLimeGreen);
+   ObjectSetInteger(0, "HS_TPLine", OBJPROP_WIDTH, 2);
+
+   ChartRedraw();
+   Print("🎨 Visual lines drawn for ", symbol);
+}
+
+// -------------------------------------------------------------------
+// HTTP Request (UTF-8 Safe)
+// -------------------------------------------------------------------
+string HttpRequest(string method, string url, string payload="")
+{
+   uchar data[];
+   uchar result[];
+   string headers = "Content-Type: application/json\r\n";
+   string response_headers;
+   
+   if(payload != "") StringToCharArray(payload, data, 0, StringLen(payload), CP_UTF8);
 
    ResetLastError();
-   int res = WebRequest("GET", url, headers, timeout, data, result, headers);
+   int res = WebRequest(method, url, headers, 5000, data, result, response_headers);
 
-   if (res == -1)
-   {
-      Print("WebRequest Error. Code: ", GetLastError());
+   if(res == -1) {
+      Print("WebRequest Error: ", GetLastError());
       return "";
    }
-
-   return CharArrayToString(result);
+   return CharArrayToString(result, 0, -1, CP_UTF8);
 }
 
 // -------------------------------------------------------------------
-// Helper: Extract a string field from JSON
+// Candle Data Packaging
 // -------------------------------------------------------------------
-string ExtractStringField(string json, string key)
+string CandlesToJson(const MqlRates &rates[])
 {
-   string pattern = StringFormat("\"%s\":\"", key);
-   int start = StringFind(json, pattern);
-   if (start < 0) return "";
-
-   int valueStart = start + StringLen(pattern);
-   int valueEnd = StringFind(json, "\"", valueStart);
-   if (valueEnd < 0) return "";
-
-   return StringSubstr(json, valueStart, valueEnd - valueStart);
-}
-
-// -------------------------------------------------------------------
-// Helper: Extract a numeric field from JSON
-// -------------------------------------------------------------------
-double ExtractNumberField(string json, string key)
-{
-   string pattern = StringFormat("\"%s\":", key);
-   int start = StringFind(json, pattern);
-   if (start < 0) return 0.0;
-
-   int valueStart = start + StringLen(pattern);
-   string slice = StringSubstr(json, valueStart, 20);
-
-   int commaPos = StringFind(slice, ",");
-   if (commaPos >= 0) slice = StringSubstr(slice, 0, commaPos);
-
-   int bracePos = StringFind(slice, "}");
-   if (bracePos >= 0) slice = StringSubstr(slice, 0, bracePos);
-
-   while (StringLen(slice) > 0 && (StringGetCharacter(slice, 0) == ' ')) {
-      slice = StringSubstr(slice, 1);
+   string json = "[";
+   int size = ArraySize(rates);
+   for(int i=0; i<size; i++) {
+      json += StringFormat("{\"close\":%f,\"high\":%f,\"low\":%f}", 
+              rates[i].close, rates[i].high, rates[i].low);
+      if(i < size - 1) json += ",";
    }
+   return json + "]";
+}
 
+void SendAllCandles()
+{
+   MqlRates rates[];
+   ArraySetAsSeries(rates, true);
+   for(int i=0; i<ArraySize(majors); i++) {
+      string sym = majors[i];
+      if(!SymbolSelect(sym, true)) continue;
+
+      CopyRates(sym, PERIOD_W1, 0, BarsToRequest, rates); string w1 = CandlesToJson(rates);
+      CopyRates(sym, PERIOD_D1, 0, BarsToRequest, rates); string d1 = CandlesToJson(rates);
+      CopyRates(sym, PERIOD_H4, 0, BarsToRequest, rates); string h4 = CandlesToJson(rates);
+      CopyRates(sym, PERIOD_H1, 0, BarsToRequest, rates); string h1 = CandlesToJson(rates);
+
+      string payload = StringFormat("{\"symbol\":\"%s\",\"candleData\":{\"1W\":%s,\"1D\":%s,\"4H\":%s,\"1H\":%s}}",
+                       sym, w1, d1, h4, h1);
+      HttpRequest("POST", CandlesURL, payload);
+   }
+}
+
+// -------------------------------------------------------------------
+// JSON Extraction & Execution
+// -------------------------------------------------------------------
+string ExtractStringField(string json, string key) {
+   string pattern = "\"" + key + "\":\"";
+   int start = StringFind(json, pattern);
+   if(start < 0) return "";
+   start += StringLen(pattern);
+   return StringSubstr(json, start, StringFind(json, "\"", start) - start);
+}
+
+double ExtractNumberField(string json, string key) {
+   string pattern = "\"" + key + "\":";
+   int start = StringFind(json, pattern);
+   if(start < 0) return 0.0;
+   start += StringLen(pattern);
+   string slice = StringSubstr(json, start, 15);
+   int p = StringFind(slice, ",");
+   if(p > 0) slice = StringSubstr(slice, 0, p);
+   p = StringFind(slice, "}");
+   if(p > 0) slice = StringSubstr(slice, 0, p);
    return StringToDouble(slice);
 }
 
-// -------------------------------------------------------------------
-// Helper: Check if a symbol is a major pair
-// -------------------------------------------------------------------
-bool IsMajorPair(string symbol)
+void ExecuteTrade(string response)
 {
-   string majors[] = {"EURUSD","GBPUSD","USDJPY","USDCHF","USDCAD","AUDUSD","NZDUSD"};
-   for (int i = 0; i < ArraySize(majors); i++)
-   {
-      if (symbol == majors[i]) return true;
-   }
-   return false;
-}
+   string action = ExtractStringField(response, "action");
+   string symbol = ExtractStringField(response, "symbol");
+   double lot    = ExtractNumberField(response, "lot");
+   double sl     = ExtractNumberField(response, "sl");
+   double tp     = ExtractNumberField(response, "tp");
 
-// -------------------------------------------------------------------
-// Helper: Execute a trade (buy/sell) with SL/TP/lot
-// - Enforces broker stop levels and symbol precision
-// - Logs final executed SL/TP
-// -------------------------------------------------------------------
-bool ExecuteTrade(string action, string symbol, double lot, double sl, double tp)
-{
-   if (!SymbolSelect(symbol, true))
-   {
-      Print("Symbol not available: ", symbol);
-      return false;
-   }
-
-   // Broker info
-   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   if(!SymbolSelect(symbol, true)) return;
+   
    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-   double stopLevelPoints = SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
-   double minStopDistance = stopLevelPoints * point;
-   double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
-   double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
+   double entry = (action == "buy") ? SymbolInfoDouble(symbol, SYMBOL_ASK) : SymbolInfoDouble(symbol, SYMBOL_BID);
 
-   // Normalize lot
-   if (lot <= 0) lot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+   // Trigger Visual Lines
+   DrawTradeLines(symbol, entry, sl, tp);
 
-   bool hasPosition = PositionSelect(symbol);
-   double price = 0.0;
-
-   if (StringCompare(action, "buy") == 0)
-   {
-      price = ask;
-
-      if (sl >= price || (price - sl) < minStopDistance) sl = price - minStopDistance;
-      if (tp <= price || (tp - price) < minStopDistance) tp = price + minStopDistance;
-
-      sl = NormalizeDouble(sl, digits);
-      tp = NormalizeDouble(tp, digits);
-
-      if (!hasPosition)
-      {
-         if (trade.Buy(lot, symbol, 0, sl, tp, "H&S Bot Buy"))
-         {
-            Print("BUY executed on ", symbol, " lot=", lot, " SL=", sl, " TP=", tp);
-            return true;
-         }
-         Print("BUY failed on ", symbol, " (", GetLastError(), ")");
-      }
-   }
-   else if (StringCompare(action, "sell") == 0)
-   {
-      price = bid;
-
-      if (sl <= price || (sl - price) < minStopDistance) sl = price + minStopDistance;
-      if (tp >= price || (price - tp) < minStopDistance) tp = price - minStopDistance;
-
-      sl = NormalizeDouble(sl, digits);
-      tp = NormalizeDouble(tp, digits);
-
-      if (!hasPosition)
-      {
-         if (trade.Sell(lot, symbol, 0, sl, tp, "H&S Bot Sell"))
-         {
-            Print("SELL executed on ", symbol, " lot=", lot, " SL=", sl, " TP=", tp);
-            return true;
-         }
-         Print("SELL failed on ", symbol, " (", GetLastError(), ")");
-      }
-   }
-   else
-   {
-      Print("Unknown action: ", action);
-   }
-
-   return false;
+   if(action == "buy" && !PositionSelect(symbol))
+      trade.Buy(lot, symbol, entry, NormalizeDouble(sl, digits), NormalizeDouble(tp, digits), "H&S 20% Risk");
+   else if(action == "sell" && !PositionSelect(symbol))
+      trade.Sell(lot, symbol, entry, NormalizeDouble(sl, digits), NormalizeDouble(tp, digits), "H&S 20% Risk");
 }
 
 // -------------------------------------------------------------------
-// OnTick: main loop
+// Main Loop
 // -------------------------------------------------------------------
 void OnTick()
 {
-   string response = SendRequest(WebhookURL);
-
-   if (response == "" || response == "{}" || StringFind(response, "\"action\":") < 0)
-      return;
-
-   // Parse JSON
-   string action = ExtractStringField(response, "action");
-   string symbol = ExtractStringField(response, "symbol");
-   double sl     = ExtractNumberField(response, "sl");
-   double tp     = ExtractNumberField(response, "tp");
-   double lot    = ExtractNumberField(response, "lot");
-
-   if (action == "" || symbol == "")
-      return;
-
-   if (!IsMajorPair(symbol))
-   {
-      Print("Ignored non-major pair: ", symbol);
-      return;
+   if(TimeCurrent() - lastSent >= 300) {
+      SendAllCandles();
+      lastSent = TimeCurrent();
    }
 
-   ExecuteTrade(action, symbol, lot, sl, tp);
+   // Dynamic Polling with live Balance for the 20% calculation
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   string pollUrl = ExecuteURL + "?balance=" + DoubleToString(balance, 2);
+   
+   string response = HttpRequest("GET", pollUrl);
+   if(response != "" && StringFind(response, "\"action\"") >= 0) {
+      ExecuteTrade(response);
+   }
 }

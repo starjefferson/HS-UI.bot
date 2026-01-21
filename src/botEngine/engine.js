@@ -3,7 +3,7 @@ import { detectPatterns } from "../patternDetection/headShoulders.js";
 import { riskCheck } from "../riskManagement/risk.js";
 import { executeTrade } from "../executionModule/brokerConnector.js";
 import { sendEmailNotification } from "../notificationService/emailNotifications.js";
-import { config } from "../config.js";
+import { config } from "../../config.js";
 import fs from "fs";
 import path from "path";
 

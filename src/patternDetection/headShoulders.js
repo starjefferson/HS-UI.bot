@@ -1,134 +1,52 @@
-import { config } from "../config.js";
+import { config } from "../../config.js";
 
-/**
- * Detect swing highs/lows
- */
-function getSwings(candles) {
+function getSwings(candles, lookback = 3) {
   const swings = [];
-  for (let i = 1; i < candles.length - 1; i++) {
-    if (candles[i].high > candles[i - 1].high && candles[i].high > candles[i + 1].high) {
-      swings.push({ type: "high", index: i, value: candles[i].high });
+  for (let i = lookback; i < candles.length - lookback; i++) {
+    const high = candles[i].high;
+    const low = candles[i].low;
+    if (high > Math.max(...candles.slice(i-lookback, i).map(c=>c.high)) && 
+        high > Math.max(...candles.slice(i+1, i+lookback).map(c=>c.high))) {
+      swings.push({ type: "high", index: i, value: high });
     }
-    if (candles[i].low < candles[i - 1].low && candles[i].low < candles[i + 1].low) {
-      swings.push({ type: "low", index: i, value: candles[i].low });
+    if (low < Math.min(...candles.slice(i-lookback, i).map(c=>c.low)) && 
+        low < Math.min(...candles.slice(i+1, i+lookback).map(c=>c.low))) {
+      swings.push({ type: "low", index: i, value: low });
     }
   }
   return swings;
 }
 
-/**
- * Detect Head & Shoulders pattern
- */
-function detectHeadShoulders(swings) {
-  for (let i = 0; i < swings.length - 4; i++) {
-    const ls = swings[i];
-    const head = swings[i + 1];
-    const rs = swings[i + 2];
-    if (
-      ls.type === "high" &&
-      head.type === "high" &&
-      rs.type === "high" &&
-      head.value > ls.value &&
-      rs.value < head.value
-    ) {
-      const neckLow1 = swings[i + 0].index + 1 < swings.length ? swings[i + 1].value : null;
-      const neckLow2 = swings[i + 1].index + 1 < swings.length ? swings[i + 2].value : null;
-      const neckline = (neckLow1 + neckLow2) / 2;
-      return { type: "H&S", LS: ls, Head: head, RS: rs, neckline, entryConfirmed: false };
-    }
-  }
-  return null;
-}
-
-/**
- * Detect Inverse Head & Shoulders pattern
- */
-function detectInverseHeadShoulders(swings) {
-  for (let i = 0; i < swings.length - 4; i++) {
-    const ls = swings[i];
-    const head = swings[i + 1];
-    const rs = swings[i + 2];
-    if (
-      ls.type === "low" &&
-      head.type === "low" &&
-      rs.type === "low" &&
-      head.value < ls.value &&
-      rs.value > head.value
-    ) {
-      const neckHigh1 = swings[i + 0].index + 1 < swings.length ? swings[i + 1].value : null;
-      const neckHigh2 = swings[i + 1].index + 1 < swings.length ? swings[i + 2].value : null;
-      const neckline = (neckHigh1 + neckHigh2) / 2;
-      return { type: "Inverse H&S", LS: ls, Head: head, RS: rs, neckline, entryConfirmed: false };
-    }
-  }
-  return null;
-}
-
-/**
- * Confirm neckline retest and set fixed 1:3 SL/TP
- */
-function confirmNecklineRetest(candles, pattern) {
-  const tolerance = pattern.type === "H&S" ? -config.tolerancePercent / 100 : config.tolerancePercent / 100;
-  for (let i = pattern.RS.index + 1; i < candles.length; i++) {
-    const candle = candles[i];
-    if (
-      (pattern.type === "H&S" && candle.high >= pattern.neckline * (1 + tolerance) && candle.low <= pattern.neckline) ||
-      (pattern.type === "Inverse H&S" && candle.low <= pattern.neckline * (1 - tolerance) && candle.high >= pattern.neckline)
-    ) {
-      if (
-        (pattern.type === "H&S" && candle.close < pattern.neckline) ||
-        (pattern.type === "Inverse H&S" && candle.close > pattern.neckline)
-      ) {
-        pattern.entryConfirmed = true;
-        pattern.retestCandle = candle;
-
-        const entryPrice = candle.close;
-        if (pattern.type === "H&S") {
-          pattern.sl = pattern.RS.value + pattern.RS.value * (config.slBufferPercent / 100);
-          const risk = pattern.sl - entryPrice;
-          pattern.tp = entryPrice - risk * config.riskReward.fixed;
-        } else {
-          pattern.sl = pattern.RS.value - pattern.RS.value * (config.slBufferPercent / 100);
-          const risk = entryPrice - pattern.sl;
-          pattern.tp = entryPrice + risk * config.riskReward.fixed;
-        }
-
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-/**
- * Confirm HH/LL break after retest
- */
-function checkBreakAfterRetest(candles, pattern) {
-  if (!pattern.entryConfirmed) return false;
-  const start = pattern.retestCandle.index + 1;
-  for (let i = start; i < candles.length; i++) {
-    const candle = candles[i];
-    if (pattern.type === "H&S" && candle.low < pattern.RS.value) {
-      pattern.entryCandle = candle;
-      return true;
-    }
-    if (pattern.type === "Inverse H&S" && candle.high > pattern.RS.value) {
-      pattern.entryCandle = candle;
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * Detect and confirm patterns for trading
- */
 export function detectPatterns(candles) {
   const swings = getSwings(candles);
-  let pattern = detectHeadShoulders(swings);
-  if (!pattern) pattern = detectInverseHeadShoulders(swings);
-  if (!pattern) return null;
-  if (!confirmNecklineRetest(candles, pattern)) return null;
-  if (!checkBreakAfterRetest(candles, pattern)) return null;
-  return pattern;
+  if (swings.length < 5) return null;
+
+  const lastSwings = swings.slice(-5);
+  const currentPrice = candles[0].close;
+
+  // Detect Regular H&S (Sell)
+  const highs = lastSwings.filter(s => s.type === "high");
+  if (highs.length >= 3) {
+    const [ls, head, rs] = highs.slice(-3);
+    if (head.value > ls.value && head.value > rs.value) {
+      const sl = rs.value + (Math.abs(head.value - rs.value) * 0.2); // Structural SL
+      const risk = Math.abs(currentPrice - sl);
+      const tp = currentPrice - (risk * config.rrRatio);
+      return { type: "sell", sl, tp, label: "H&S" };
+    }
+  }
+
+  // Detect Inverse H&S (Buy)
+  const lows = lastSwings.filter(s => s.type === "low");
+  if (lows.length >= 3) {
+    const [ls, head, rs] = lows.slice(-3);
+    if (head.value < ls.value && head.value < rs.value) {
+      const sl = rs.value - (Math.abs(head.value - rs.value) * 0.2);
+      const risk = Math.abs(currentPrice - sl);
+      const tp = currentPrice + (risk * config.rrRatio);
+      return { type: "buy", sl, tp, label: "Inverse H&S" };
+    }
+  }
+
+  return null;
 }

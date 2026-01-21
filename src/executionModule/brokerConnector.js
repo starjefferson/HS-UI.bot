@@ -1,97 +1,62 @@
-import { config } from "../config.js";
+import { config } from "../../config.js";
 
-/**
- * Pip value per lot for major pairs
- * - EURUSD, GBPUSD → $10 per pip per lot
- * - USDJPY → ~$9.1 per pip per lot (approx)
- */
+/** Pip value per lot */
 function getPipValuePerLot(symbol) {
   switch (symbol) {
-    case "USDJPY":
-      return 9.1; // approximate pip value per lot
+    case "USDJPY": return 9.1;
     case "EURUSD":
     case "GBPUSD":
-    default:
-      return 10; // $10 per pip per lot
+    default: return 10;
   }
 }
 
-/**
- * Calculate lot size based on riskPercent in config
- * balance: account balance
- * entryPrice: trade entry price
- * slPrice: stop loss price
- * symbol: trading pair
- */
+/** Lot size calculation */
 function calculateLotSize(balance, entryPrice, slPrice, symbol = "EURUSD") {
-  const riskAmount = balance * (config.riskPercent / 100); // 5% of balance
-
-  // Stop loss distance in pips
-  let stopLossPips;
-  if (symbol === "USDJPY") {
-    // JPY pairs: pip = 0.01
-    stopLossPips = Math.abs(entryPrice - slPrice) * 100;
-  } else {
-    // Standard 5-digit pairs: pip = 0.0001
-    stopLossPips = Math.abs(entryPrice - slPrice) * 10000;
-  }
+  const riskAmount = balance * (config.riskPercent / 100);
+  let stopLossPips = symbol === "USDJPY"
+    ? Math.abs(entryPrice - slPrice) * 100
+    : Math.abs(entryPrice - slPrice) * 10000;
 
   const pipValuePerLot = getPipValuePerLot(symbol);
-
-  if (stopLossPips === 0) return config.defaultLotSize || 0.1; // fallback
+  if (stopLossPips === 0) return config.defaultLotSize || 0.1;
 
   const lotSize = riskAmount / (stopLossPips * pipValuePerLot);
-
-  // Round to 0.01 lots minimum
   return Math.max(0.01, parseFloat(lotSize.toFixed(2)));
 }
 
-/**
- * Execute trade via broker API (MT5 EA bridge)
- * pattern: { type, pair, entryCandle, sl, tp }
- */
+/** Execute trade via server.js */
 export async function executeTrade(pattern) {
   try {
     const balance = await getBalance();
-
-    const lot = calculateLotSize(
-      balance,
-      pattern.entryCandle.close,
-      pattern.sl,
-      pattern.pair
-    );
+    const lot = calculateLotSize(balance, pattern.entryCandle.close, pattern.sl, pattern.pair);
 
     const signal = {
-      action: pattern.type.toLowerCase(), // "buy" or "sell"
+      action: pattern.type.toLowerCase(),
       symbol: pattern.pair,
       sl: pattern.sl,
       tp: pattern.tp,
       lot,
     };
 
-    console.log("Sending trade signal to MT5 EA:", signal);
+    console.log("Sending trade signal:", signal);
 
-    const res = await fetch("http://127.0.0.1:3000/api/broker", {
+    const res = await fetch("http://127.0.0.1:3001/order", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "setSignal", ...signal }),
+      body: JSON.stringify(signal),
     });
 
-    const data = await res.json();
-    console.log("Broker response:", data);
-    return data;
+    return await res.json();
   } catch (err) {
     console.error("Trade execution failed:", err);
     return null;
   }
 }
 
-/**
- * Get account balance from broker (via EA bridge)
- */
+/** Get account balance */
 export async function getBalance() {
   try {
-    const res = await fetch("http://127.0.0.1:3000/api/broker?type=balance");
+    const res = await fetch("http://127.0.0.1:3001/balance");
     const data = await res.json();
     return data.balance;
   } catch (err) {
@@ -100,20 +65,15 @@ export async function getBalance() {
   }
 }
 
-/**
- * Place order directly (optional shortcut)
- * signal: { action, symbol, sl, tp, lot }
- */
+/** Place order directly */
 export async function placeOrder(signal) {
   try {
-    const res = await fetch("http://127.0.0.1:3000/api/broker", {
+    const res = await fetch("http://127.0.0.1:3001/order", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "executeOrder", ...signal }),
+      body: JSON.stringify(signal),
     });
-
-    const data = await res.json();
-    return data;
+    return await res.json();
   } catch (err) {
     console.error("Order placement failed:", err);
     return null;
