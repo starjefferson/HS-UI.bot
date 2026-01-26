@@ -1,0 +1,137 @@
+[
+  {
+    "type": "sell",
+    "label": "Head and Shoulders",
+    "pair": "USDCHF",
+    "sl": 0.79678,
+    "tp": 0.7637799999999999,
+    "necklineHigh": 0.78859,
+    "necklineLow": 0.78835,
+    "timestamp": "2026-01-23T16:47:24.843Z",
+    "entryPrice": 0.7877,
+    "executed": true,
+    "executionTime": "2026-01-23T16:47:26.787Z"
+  },
+  {
+    "type": "sell",
+    "label": "Head and Shoulders",
+    "pair": "USDCHF",
+    "sl": 0.79678,
+    "tp": 0.7637799999999999,
+    "necklineHigh": 0.78859,
+    "necklineLow": 0.78835,
+    "timestamp": "2026-01-23T16:52:26.556Z",
+    "entryPrice": 0.78753,
+    "executed": true,
+    "executionTime": "2026-01-26T09:57:34.932Z"
+  },
+  {
+    "type": "buy",
+    "label": "Inverted Head and Shoulders (Multi-TF)",
+    "pair": "AUDUSD",
+    "sl": 0.68334,
+    "tp": 0.6988600000000003,
+    "necklineHigh": 0.69292,
+    "necklineLow": 0.68532,
+    "headTime": 1769438711436,
+    "activeTFs": [
+      "1D",
+      "4H",
+      "1H"
+    ],
+    "timestamp": 1769438711440,
+    "patternID": "AUDUSD_buy_1769438711436",
+    "entryPrice": 0.69353,
+    "executed": true,
+    "triggerTF": "H1",
+    "status": "sent_to_mt5",
+    "executionTime": "2026-01-26T14:45:11.587Z"
+  },
+  {
+    "type": "buy",
+    "label": "Inverted Head and Shoulders (Multi-TF)",
+    "pair": "AUDUSD",
+    "sl": 0.68334,
+    "tp": 0.6988600000000003,
+    "necklineHigh": 0.69292,
+    "necklineLow": 0.68532,
+    "headTime": 1769439012667,
+    "activeTFs": [
+      "1D",
+      "4H",
+      "1H"
+    ],
+    "timestamp": 1769439012674,
+    "patternID": "AUDUSD_buy_1769439012667",
+    "entryPrice": 0.69357,
+    "executed": true,
+    "triggerTF": "H1",
+    "status": "sent_to_mt5",
+    "executionTime": "2026-01-26T15:11:22.667Z"
+  },
+  {
+    "type": "buy",
+    "label": "Inverted Head and Shoulders (Multi-TF)",
+    "pair": "AUDUSD",
+    "sl": 0.68334,
+    "tp": 0.6988600000000003,
+    "necklineHigh": 0.69292,
+    "necklineLow": 0.68532,
+    "headTime": 1769439313760,
+    "activeTFs": [
+      "1D",
+      "4H",
+      "1H"
+    ],
+    "timestamp": 1769439313762,
+    "patternID": "AUDUSD_buy_1769439313760",
+    "entryPrice": 0.69366,
+    "executed": true,
+    "triggerTF": "H1",
+    "status": "sent_to_mt5",
+    "executionTime": "2026-01-26T15:11:58.014Z"
+  },
+  {
+    "type": "buy",
+    "label": "Inverted Head and Shoulders (Multi-TF)",
+    "pair": "AUDUSD",
+    "sl": 0.68334,
+    "tp": 0.6988600000000003,
+    "necklineHigh": 0.69292,
+    "necklineLow": 0.68532,
+    "headTime": 1769439613239,
+    "activeTFs": [
+      "1D",
+      "4H",
+      "1H"
+    ],
+    "timestamp": 1769439613249,
+    "patternID": "AUDUSD_buy_1769439613239",
+    "entryPrice": 0.69379,
+    "executed": true,
+    "triggerTF": "H4",
+    "status": "sent_to_mt5",
+    "executionTime": "2026-01-26T15:12:07.897Z"
+  },
+  {
+    "type": "buy",
+    "label": "Inverted Head and Shoulders (Multi-TF)",
+    "pair": "AUDUSD",
+    "sl": 0.6902600000000001,
+    "tp": 0.7008999999999996,
+    "necklineHigh": 0.69292,
+    "necklineLow": 0.68532,
+    "headTime": 29,
+    "activeTFs": [
+      "1D",
+      "4H",
+      "1H"
+    ],
+    "timestamp": 1769441971304,
+    "patternID": "AUDUSD_buy_29",
+    "entryPrice": 0.69318,
+    "executed": true,
+    "rr": "2.64",
+    "executionTime": "2026-01-26T18:51:01.026Z"
+  }
+]
