@@ -1,0 +1,1134 @@
+================================================================================
+  HS-BOT — HEAD & SHOULDERS TRADING BOT
+  COMPLETE BEGINNER GUIDE
+  Written for the HS-UI.bot project
+================================================================================
+
+  This guide explains everything from scratch — what the bot does, how every
+  piece works, how to set it up on your computer, how to deploy it to a VPS,
+  and the exact steps to follow inside MetaTrader 5.
+
+  No prior experience required to follow this guide.
+
+================================================================================
+  TABLE OF CONTENTS
+================================================================================
+
+  1.  What This Bot Does (Plain English)
+  2.  How the Bot Makes Trading Decisions
+  3.  The Two Parts of the Bot
+  4.  File-by-File Explanation
+  5.  Setting Up on Your Computer (First Time)
+  6.  Setting Up MetaTrader 5 — Step by Step (Exact Clicks)
+  7.  Running the Bot Locally (Testing)
+  8.  Deploying to a VPS (24/7 Operation)
+  9.  Configuration Reference
+  10. Understanding the Log Messages
+  11. What to Do When Something Goes Wrong
+  12. How Trades Are Calculated
+
+================================================================================
+  1. WHAT THIS BOT DOES (PLAIN ENGLISH)
+================================================================================
+
+  This is an automated Forex trading bot that:
+
+  - Watches 7 currency pairs at the same time:
+    EURUSD, GBPUSD, USDJPY, USDCHF, USDCAD, AUDUSD, NZDUSD
+
+  - Scans candle data across 4 timeframes (Weekly, Daily, 4-Hour, 1-Hour)
+
+  - Looks for ONE specific chart pattern: "Head and Shoulders" (H&S) and its
+    mirror image "Inverted Head and Shoulders"
+
+  - Only trades when MULTIPLE conditions line up:
+    ✓ The pattern must be confirmed by multi-timeframe analysis
+    ✓ The overall market trend must agree with the pattern direction
+    ✓ The neckline must actually BREAK before a trade is entered
+    ✓ The Risk:Reward must be between 2.5 and 3.0
+    ✓ It must be within trading hours (8am–9pm GMT+1)
+    ✓ The weekly trade limit must not be exceeded
+
+  - Calculates the correct lot size automatically based on your account balance
+    and 5% risk per trade
+
+  - Sends trade orders directly into MetaTrader 5 without you clicking anything
+
+================================================================================
+  2. HOW THE BOT MAKES TRADING DECISIONS
+================================================================================
+
+  The bot follows this exact sequence for every pair, every 5 minutes:
+
+  STEP 1 — TRADING HOURS CHECK
+  ─────────────────────────────
+  The bot first checks if the current time is between 08:00 and 21:00 GMT+1.
+  Outside this window, the bot does nothing. This is because Asian session
+  tends to have low volume and fake breakouts, and late-night entries have
+  worse execution. If you are in Nigeria or West Africa, GMT+1 is your local
+  time (WAT). So the bot trades 8am to 9pm your time.
+
+  STEP 2 — TOP-DOWN TREND ALIGNMENT (3-of-4 Filter)
+  ───────────────────────────────────────────────────
+  The bot checks all 4 timeframes (Weekly, Daily, 4H, 1H) and asks:
+  "Is price above or below the 20-period Simple Moving Average?"
+
+  - Price ABOVE the 20 SMA = Bullish (buy bias)
+  - Price BELOW the 20 SMA = Bearish (sell bias)
+
+  For a trade to be considered:
+  - At least 3 out of 4 timeframes must agree
+
+  Example: If W1=buy, D1=buy, H4=buy, H1=sell → 3 of 4 say buy → BUY BIAS
+  Example: If W1=sell, D1=buy, H4=buy, H1=buy → 3 of 4 say buy → BUY BIAS
+  Example: If W1=buy, D1=sell, H4=buy, H1=sell → only 2 agree → NO TRADE
+
+  STEP 3 — HEAD & SHOULDERS PATTERN DETECTION
+  ─────────────────────────────────────────────
+  What is a Head and Shoulders pattern?
+
+  It looks like this on a chart:
+
+      Left    HEAD    Right
+    Shoulder  (top)  Shoulder
+       /\      /\      /\
+      /  \    /  \    /  \
+     /    \  /    \  /    \
+    /      \/      \/      \
+    ─────────────────────────  ← NECKLINE
+    (price should break below here)
+
+  This is a BEARISH reversal pattern. It means the market tried to go up 3
+  times, with the middle attempt (the "head") going the highest. After the
+  right shoulder forms, the market runs out of buyers and is about to fall.
+
+  The INVERTED version (Inverse H&S) is the mirror image and signals a BULLISH
+  reversal — price tried to go down 3 times and is about to rise.
+
+  The bot scans 250 candles of history looking for these formations.
+
+  STEP 4 — DIRECTION CONFIRMATION
+  ─────────────────────────────────
+  The pattern direction must match the trend bias from Step 2.
+  - H&S (sell pattern) is ONLY valid if the bias is also "sell"
+  - Inverted H&S (buy pattern) is ONLY valid if the bias is also "buy"
+
+  If they don't match, the signal is rejected with "bias_mismatch".
+
+  STEP 5 — NECKLINE BREAKOUT CONFIRMATION
+  ─────────────────────────────────────────
+  The bot does NOT enter the moment the pattern is spotted.
+  It WAITS for the neckline to actually break.
+
+  For a SELL:
+  - The previous H1 candle must have closed AT or ABOVE the neckline
+  - The current candle must close BELOW the neckline by at least 2 pips
+  → This confirms sellers are in control
+
+  For a BUY:
+  - The previous H1 candle must have closed AT or BELOW the neckline
+  - The current candle must close ABOVE the neckline by at least 2 pips
+  → This confirms buyers are in control
+
+  Without this breakout, the bot just logs "Monitoring for Neckline Breakout"
+  and waits for the next scan cycle.
+
+  STEP 6 — RISK:REWARD CHECK
+  ────────────────────────────
+  The bot calculates the distance from entry to Stop Loss (the risk) and
+  from entry to Take Profit (the reward).
+
+  RR = (distance to TP) / (distance to SL)
+
+  Only trades with RR between 2.5 and 3.0 are executed.
+  - RR below 2.5 = not profitable enough for the risk taken
+  - RR above 3.0 = the SL is probably too tight and the pattern may be wrong
+
+  STEP 7 — SIGNAL QUEUING
+  ─────────────────────────
+  If all checks pass, the signal is written to signals.json.
+  MetaTrader 5 picks it up on the next tick.
+
+  STEP 8 — LOT SIZE CALCULATION
+  ──────────────────────────────
+  The bot calculates lot size using:
+
+  Risk Amount = Account Balance × 5%
+  Stop Loss in pips = |Entry Price − SL Price| ÷ pip size
+  Lot Size = Risk Amount ÷ (SL pips × pip value)
+
+  This means if your balance grows, lot sizes grow. If your balance shrinks,
+  lot sizes shrink. Your account risk is always approximately 5% per trade.
+
+================================================================================
+  3. THE TWO PARTS OF THE BOT
+================================================================================
+
+  The bot has TWO separate programs that run at the same time:
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  PART 1: NODE.JS SERVER (server.js)                            │
+  │  Runs on: Your computer or VPS                                 │
+  │  Port: 3001 (internal, not public)                             │
+  │  Role: Brain — receives data, detects patterns, queues trades  │
+  └─────────────────────────────────────────────────────────────────┘
+                              ▲│
+                    candles   ││  trade signals
+                    every     ││  (buy/sell/lot/sl/tp)
+                    5 min     ││
+                              │▼
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  PART 2: MT5 EXPERT ADVISOR (MT5_TradeExecutor.mq5)           │
+  │  Runs on: MetaTrader 5 (on your Windows machine or VPS)        │
+  │  Role: Hands — fetches candle data and executes orders         │
+  └─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  PART 3: NEXT.JS DASHBOARD (app/)                              │
+  │  Runs on: Browser at http://localhost:3000                     │
+  │  Port: 3000 (can be exposed publicly on VPS)                   │
+  │  Role: Eyes — shows balance, open trades, history              │
+  └─────────────────────────────────────────────────────────────────┘
+
+  IMPORTANT: Both Node.js and MetaTrader 5 must be running at the same time
+  on the SAME machine (or both on a VPS). The MT5 EA makes HTTP requests to
+  http://127.0.0.1:3001 — this only works when they share the same network.
+
+================================================================================
+  4. FILE-BY-FILE EXPLANATION
+================================================================================
+
+  PROJECT ROOT FILES:
+  ────────────────────
+
+  server.js
+    The core Express.js web server. This is the brain of the bot.
+    It has 3 routes (web endpoints):
+    - POST /candles   → receives candle data from MT5, runs all detection logic
+    - GET  /execute   → MT5 polls this to receive a trade order
+    - GET  /balance   → dashboard reads this to show account balance
+    - GET  /status    → health check, shows bot state
+
+  config.js
+    All the settings for the bot in one place:
+    - pairs: which currency pairs to watch
+    - tradingHours: start and end hour (GMT+1)
+    - maxTradesPerWeek: weekly safety limit
+    - riskPercent: % of balance to risk per trade (set to 5%)
+    - rrRatio: the minimum reward-to-risk ratio
+    Change numbers here to adjust bot behaviour — do NOT edit server.js for this.
+
+  MT5_TradeExecutor.mq5
+    The MetaTrader 5 Expert Advisor (trading script). Written in MQL5.
+    This file is compiled and run inside MetaTrader 5.
+    Every tick, it:
+    1. Every 5 minutes: collects candle data and POSTs to /candles
+    2. Every tick: calls GET /execute to check for pending orders
+    3. If an order exists: places the trade and draws visual lines on the chart
+
+  signals.json
+    Temporary queue file. When the server detects a valid signal, it writes it
+    here. When MT5 picks it up, the entry is removed. This file is automatically
+    cleared every time the server restarts to prevent stale signals.
+
+  history.json
+    Internal log of all signals that have been executed. Used to prevent the
+    same pattern from being traded more than once (via patternID matching).
+
+  closedTrades.json
+    User-facing log of all executed trades. Read by:
+    - risk.js (to check weekly trade count)
+    - The dashboard (to show total trades, history)
+    Starts empty. Grows as trades are taken.
+
+  pm2.ecosystem.config.cjs
+    PM2 process manager configuration. Used on VPS to keep both the server
+    and dashboard alive 24/7 with automatic crash recovery.
+
+  SRC/ FOLDER (bot engine modules):
+  ───────────────────────────────────
+
+  src/patternDetection/headShoulders.js
+    Contains the structural pattern detection algorithm.
+    - Scans the last 250 candles for local price peaks (for H&S) or troughs (for IHS)
+    - Uses a "sliding window" of radius 5 candles to find swing highs/lows
+    - Identifies the Left Shoulder, Head, and Right Shoulder
+    - Calculates neckline levels, Stop Loss (above/below Right Shoulder), and TP
+    - Returns null if no valid pattern is found
+
+  src/patternDetection/patternEngine.js
+    Orchestrates the detection across timeframes.
+    - Runs headShoulders.js on D1, H4, and H1 data
+    - Requires H1 to have a pattern (most precise)
+    - If D1 or H4 also have patterns, their direction must agree with H1
+    - Validates that the TP is placed on the correct side of the neckline
+
+  src/patternDetection/topDownAnalysis.js
+    Standalone top-down trend check used by the old engine.js (legacy, not
+    used in the active server.js pipeline — the trend check is built into server.js).
+
+  src/riskManagement/risk.js
+    Weekly trade frequency control.
+    - canTrade(): reads closedTrades.json, counts trades in the current week
+    - Returns false if maxTradesPerWeek has been reached
+    - Also enforces minDaysBetweenTrades cooldown (currently 0 = no cooldown)
+
+  src/notificationService/emailNotifications.js
+    Placeholder for email alerts. Currently just logs to the console.
+    Future implementation: connect to an SMTP server or email API (e.g. Nodemailer,
+    SendGrid) to get alerts on your phone when a trade is placed.
+
+  APP/ FOLDER (Next.js dashboard):
+  ──────────────────────────────────
+
+  app/page.js
+    The main page — just renders the Dashboard component.
+
+  app/layout.js
+    Sets the font, background, and page metadata.
+
+  app/api/broker/route.js
+    Next.js API routes for the dashboard to read data:
+    - GET /api/broker?type=balance  → fetches balance from Node server
+    - GET /api/broker?type=open     → reads last open trade from closedTrades.json
+    - GET /api/broker?type=trades   → counts total trades in closedTrades.json
+
+  src/components/Dashboard.js
+    The visual interface showing three cards: Account Balance, Open Trade, Total Trades.
+
+================================================================================
+  5. SETTING UP ON YOUR COMPUTER (FIRST TIME)
+================================================================================
+
+  REQUIREMENTS:
+  - Node.js v18 or newer. Download from: https://nodejs.org
+  - MetaTrader 5. Download from your broker's website.
+  - A Forex broker account with MT5 support (demo is fine for testing)
+  - A terminal (Command Prompt, PowerShell, or Windows Terminal)
+
+  STEP 1 — Open a terminal in the project folder
+  ──────────────────────────────────────────────
+  Open PowerShell or Command Prompt.
+  Type this command to go to the project folder:
+
+    cd "C:\Users\DELL PC\Documents\HS-UI.bot"
+
+  Press Enter.
+
+  STEP 2 — Install Node.js dependencies
+  ──────────────────────────────────────
+  Run this command:
+
+    npm install
+
+  This downloads all the libraries the bot needs (Express, Next.js, etc.).
+  It will take 1–2 minutes. You'll see a lot of text scrolling — that's normal.
+  When it finishes, you'll see a line like "added 500 packages".
+
+  STEP 3 — Verify the install worked
+  ────────────────────────────────────
+  Run this to check:
+
+    node --version
+
+  You should see something like: v20.11.0 (or higher)
+
+    npm --version
+
+  You should see something like: 10.x.x
+
+================================================================================
+  6. SETTING UP METATRADER 5 — STEP BY STEP (EXACT CLICKS)
+================================================================================
+
+  This section gives you the EXACT sequence of clicks and menu items.
+
+  ════════════════════════════════════════════════════════════════════════════
+  PART A: ALLOW THE EA TO MAKE INTERNET REQUESTS (CRITICAL — DO THIS FIRST)
+  ════════════════════════════════════════════════════════════════════════════
+
+  Without this step, the EA cannot communicate with the Node.js server
+  and you will see "WebRequest Error: 4060" in the MT5 Journal tab.
+
+  Step A1: Open MetaTrader 5
+
+  Step A2: Click "Tools" in the top menu bar
+            (the menu bar at the very top: File | View | Insert | Charts |
+             Tools | Window | Help)
+
+  Step A3: Click "Options" (near the bottom of the Tools dropdown)
+            → A settings window will open
+
+  Step A4: Click the "Expert Advisors" tab
+            (you'll see tabs: Charts | Trade | Expert Advisors | Notifications |
+             Email | FTP | Community | Signals)
+
+  Step A5: Make sure this checkbox is TICKED:
+            ✅ "Allow WebRequest for listed URL:"
+
+  Step A6: In the text box directly below that checkbox, type:
+            http://127.0.0.1:3001
+            Then click the [+] (Add) button to the right of the text box.
+            The URL should now appear in the list below.
+
+  Step A7: Click [OK] to save and close the Options window.
+
+  → You have now given the EA permission to talk to the local Node.js server.
+
+  ════════════════════════════════════════════════════════════════════════════
+  PART B: COMPILE THE EXPERT ADVISOR FILE
+  ════════════════════════════════════════════════════════════════════════════
+
+  Step B1: Click "Tools" → "MetaQuotes Language Editor"
+            (or press F4 on your keyboard)
+            → A new window called "MetaEditor" will open
+
+  Step B2: In MetaEditor, click "File" → "Open"
+
+  Step B3: Navigate to your project folder:
+            C:\Users\DELL PC\Documents\HS-UI.bot\
+
+  Step B4: Select "MT5_TradeExecutor.mq5" and click Open
+
+  Step B5: Press F7 (or click "Compile" in the toolbar)
+            → You should see in the bottom panel:
+              "0 errors, 0 warnings"
+            → If you see errors, check that you did not accidentally edit the
+              .mq5 file. Contact for support.
+
+  Step B6: Close MetaEditor (you can keep it open if you like)
+
+  ════════════════════════════════════════════════════════════════════════════
+  PART C: ADD ALL 7 CURRENCY PAIRS TO MARKET WATCH
+  ════════════════════════════════════════════════════════════════════════════
+
+  The EA watches 7 pairs. They all need to be visible in MT5's Market Watch.
+
+  Step C1: In the main MT5 window, press Ctrl+M to open Market Watch
+            (or click View → Market Watch)
+
+  Step C2: Right-click anywhere inside the Market Watch panel
+
+  Step C3: Click "Show All" — this adds all available symbols
+
+  Step C4: Or, to add individually: right-click → "Symbols"
+            Search for each pair and double-click to add:
+            → EURUSD, GBPUSD, USDJPY, USDCHF, USDCAD, AUDUSD, NZDUSD
+
+  ════════════════════════════════════════════════════════════════════════════
+  PART D: ATTACH THE EA TO A CHART
+  ════════════════════════════════════════════════════════════════════════════
+
+  The EA only needs to run on ONE chart. It will scan all 7 pairs internally.
+  Use EURUSD H1 as the host chart (it's the most liquid and always has data).
+
+  Step D1: In Market Watch, double-click "EURUSD" to open a chart
+
+  Step D2: On the chart timeframe bar (M1 M5 M15 M30 H1 H4 D1 W1 MN),
+            click "H1" to set it to the 1-Hour timeframe
+
+  Step D3: In MetaEditor (or back in MT5), find the Navigator panel.
+            Press Ctrl+N to open the Navigator if it's not visible.
+
+  Step D4: In the Navigator, expand "Expert Advisors"
+            → You should see "MT5_TradeExecutor" listed there
+
+  Step D5: Double-click "MT5_TradeExecutor"
+            → An "Expert Advisor Properties" window will open
+
+  Step D6: In the "Common" tab, make sure these are checked:
+            ✅ Allow Automated Trading
+            ✅ Allow DLL Imports (if shown)
+
+  Step D7: In the "Inputs" tab you can see and adjust:
+            - ExecuteURL: http://127.0.0.1:3001/execute   (leave as-is)
+            - CandlesURL: http://127.0.0.1:3001/candles   (leave as-is)
+            - BarsToRequest: 250                           (leave as-is)
+
+  Step D8: Click [OK]
+            → The EA icon (a small smiley face) should now appear in the
+              top-right corner of the EURUSD H1 chart
+            → The face should be YELLOW (meaning automated trading is ON)
+              If it's GREY, click the "AutoTrading" button in the MT5 toolbar
+
+  ════════════════════════════════════════════════════════════════════════════
+  PART E: ENABLE AUTOMATED TRADING (MASTER SWITCH)
+  ════════════════════════════════════════════════════════════════════════════
+
+  Step E1: Look at the MT5 toolbar at the top of the screen
+            Find the button that says "AutoTrading"
+            (it has a green play icon next to it)
+
+  Step E2: If the button is greyed out or shows "AutoTrading" with a red icon,
+            CLICK IT to enable automated trading.
+
+  Step E3: The EA face on the chart should now turn YELLOW (not grey or red).
+
+  → The bot is now active. It will start sending candle data to the server
+    5 minutes after attaching (on the next 5-minute cycle).
+
+  ════════════════════════════════════════════════════════════════════════════
+  PART F: CHECK THE MT5 JOURNAL (VERIFY IT'S WORKING)
+  ════════════════════════════════════════════════════════════════════════════
+
+  Step F1: Look at the bottom of the MT5 window.
+            You'll see tabs: Trade | History | Alerts | Mailbox | Journal | Experts
+
+  Step F2: Click the "Experts" tab (NOT Journal — "Experts" shows EA logs)
+
+  Step F3: After attaching the EA, you should see log messages like:
+            "🚀 HS-Bot Bridge Active | Port 3001"       ← server started
+            "📤 [EURUSD] Scan response: {"status":"scanning"}"
+            "📤 [GBPUSD] Scan response: {"status":"outside_hours"}"
+
+  Step F4: If you see:
+            "⛔ WebRequest blocked. Go to: Tools → Options..."
+            → Go back to Part A and make sure the URL was added correctly.
+
+            "WebRequest Error: -1"
+            → The Node.js server is not running. Start it first (Section 7).
+
+================================================================================
+  7. RUNNING THE BOT LOCALLY (TESTING)
+================================================================================
+
+  BEFORE starting MT5 with the EA, start the Node.js server.
+  The server must always be running when MT5 is running.
+
+  STEP 1 — Open a terminal in the project folder
+  ──────────────────────────────────────────────
+    cd "C:\Users\DELL PC\Documents\HS-UI.bot"
+
+  STEP 2 — Start both the server and dashboard together
+  ──────────────────────────────────────────────────────
+    npm run dev
+
+  You will see two sets of output interleaved:
+
+    [0] 🚀 HS-Bot Bridge Active | Port 3001
+    [0] 📊 Status: http://localhost:3001/status
+    [0] ⏰ Trading Window: 8:00 – 21:00 GMT+1
+    [0] 💰 Risk Per Trade: 5%
+    [1]   ▲ Next.js 16 ready on http://localhost:3000
+
+  The [0] lines are from server.js (port 3001).
+  The [1] lines are from the Next.js dashboard (port 3000).
+
+  STEP 3 — Open the dashboard in your browser
+  ─────────────────────────────────────────────
+    http://localhost:3000
+
+  STEP 4 — Check the bot health
+  ───────────────────────────────
+    http://localhost:3001/status
+
+  You should see a JSON response like:
+  {
+    "status": "online",
+    "balance": 0,
+    "pendingSignals": 0,
+    "totalExecuted": 0,
+    "tradingWindow": "8:00 – 21:00 GMT+1",
+    "riskPercent": 5,
+    "pairs": ["EURUSD", "GBPUSD", ...]
+  }
+
+  STEP 5 — Start MT5 and attach the EA (Section 6)
+
+  STEP 6 — Watch the terminal for scan logs:
+    --- 📊 [EURUSD] Scan ---
+    Trends | W1:sell D1:sell H4:buy H1:sell
+    Scores | BUY: 1/4 | SELL: 3/4 | BIAS: SELL
+    ⏳ [EURUSD] Setup Valid. Monitoring for Neckline Breakout...
+
+  The bot is now fully operational in test mode.
+
+  TO STOP:
+  Press Ctrl+C in the terminal to stop both processes.
+
+================================================================================
+  8. DEPLOYING TO A VPS (24/7 OPERATION)
+================================================================================
+
+  A VPS (Virtual Private Server) is a computer in the cloud that stays on
+  24/7. You rent one monthly. This is how you keep the bot running even when
+  your own computer is off.
+
+  RECOMMENDED VPS SPEC:
+  - 2 GB RAM minimum (4 GB recommended)
+  - Ubuntu 22.04 LTS operating system
+  - 20 GB SSD storage
+  - Providers: Contabo, DigitalOcean, Vultr, AWS EC2
+
+  NOTE FOR MT5:
+  If you deploy to a Linux VPS, MT5 does NOT run natively on Linux.
+  Options:
+  a) Use a Windows VPS (more expensive, ~$10–20/month)
+      → Install MT5 on the Windows VPS normally
+      → Deploy the Node.js server on the same Windows VPS
+  b) Use Wine on Linux (advanced — emulates Windows, runs MT5)
+  c) Keep MT5 running on your local Windows PC
+      → Change ExecuteURL and CandlesURL in the EA from http://127.0.0.1:3001
+        to http://YOUR_VPS_IP:3001
+      → Open port 3001 in your VPS firewall
+
+  SIMPLEST SETUP: Windows VPS with both MT5 and Node.js on the same machine.
+
+  STEP-BY-STEP VPS DEPLOYMENT:
+  ──────────────────────────────
+
+  STEP 1 — SSH into your VPS
+    ssh root@YOUR_VPS_IP
+    (Use PuTTY on Windows if you don't have an SSH client)
+
+  STEP 2 — Install Node.js on the VPS
+    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+    sudo apt-get install -y nodejs
+
+  STEP 3 — Install PM2 globally
+    npm install -g pm2
+
+  STEP 4 — Upload your project to the VPS
+    Option A (from your computer using SCP):
+      scp -r "C:\Users\DELL PC\Documents\HS-UI.bot" root@YOUR_VPS_IP:/root/hs-bot
+
+    Option B: Use GitHub
+      git push to GitHub from your computer
+      git clone https://github.com/YOUR_USERNAME/HS-UI.bot /root/hs-bot
+
+  STEP 5 — Navigate to the project on the VPS
+    cd /root/hs-bot
+
+  STEP 6 — Install dependencies
+    npm install
+
+  STEP 7 — Build the Next.js dashboard
+    npm run build
+    (This takes 1–3 minutes. Run it only once, or after making UI changes)
+
+  STEP 8 — Start both processes with PM2
+    npm run start:prod
+    (This is the same as: pm2 start pm2.ecosystem.config.cjs)
+
+  STEP 9 — Verify both are running
+    pm2 status
+
+    You should see:
+    ┌─────────────────────┬────────┬──────┬──────┬──────┐
+    │ name                │ status │ cpu  │ mem  │ ...  │
+    ├─────────────────────┼────────┼──────┼──────┼──────┤
+    │ hs-bot-server       │ online │ 0%   │ 50mb │      │
+    │ hs-dashboard        │ online │ 0%   │ 80mb │      │
+    └─────────────────────┴────────┴──────┴──────┴──────┘
+
+  STEP 10 — Set PM2 to restart on VPS reboot
+    pm2 startup
+    (Copy the command it outputs and run it — it will look something like:
+     sudo env PATH=... pm2 startup systemd -u root --hp /root)
+    pm2 save
+
+  STEP 11 — Open firewall port for the dashboard (optional)
+    ufw allow 3000
+    (Port 3001 should NOT be exposed publicly — it's for MT5 only)
+
+  STEP 12 — Access the dashboard in your browser
+    http://YOUR_VPS_IP:3000
+
+  USEFUL PM2 COMMANDS:
+  ──────────────────────
+    pm2 status           → see if both processes are running
+    pm2 logs             → see live output from both processes
+    pm2 logs hs-bot-server  → logs from the bot server only
+    pm2 restart all      → restart both processes
+    pm2 stop all         → stop both processes
+    pm2 monit            → live CPU/memory monitor (press q to exit)
+    pm2 delete all       → remove from PM2 (does not delete your files)
+
+================================================================================
+  9. CONFIGURATION REFERENCE
+================================================================================
+
+  All bot settings are in: config.js
+
+  ┌─────────────────────────┬──────────────────────────────────────────────────┐
+  │ Setting                 │ What it does                                     │
+  ├─────────────────────────┼──────────────────────────────────────────────────┤
+  │ pairs                   │ Which currency pairs to scan. Add or remove pairs │
+  │                         │ here. They must also be in MT5 Market Watch.     │
+  ├─────────────────────────┼──────────────────────────────────────────────────┤
+  │ topDownTFs              │ Timeframes used for trend alignment. Default:    │
+  │                         │ ["1W", "1D", "4H", "1H"]                        │
+  ├─────────────────────────┼──────────────────────────────────────────────────┤
+  │ maxTradesPerWeek        │ Maximum trades per week. Default: 7.             │
+  │                         │ If reached, bot stops executing until next week. │
+  ├─────────────────────────┼──────────────────────────────────────────────────┤
+  │ minDaysBetweenTrades    │ Minimum days between any two trades. Default: 0  │
+  │                         │ (no cooldown). Set to 1 to only trade once/day. │
+  ├─────────────────────────┼──────────────────────────────────────────────────┤
+  │ tradingHours.start      │ Hour (GMT+1) to start scanning. Default: 8       │
+  │                         │ (08:00 WAT). Do not enter trades before this.   │
+  ├─────────────────────────┼──────────────────────────────────────────────────┤
+  │ tradingHours.end        │ Hour (GMT+1) to stop scanning. Default: 21       │
+  │                         │ (21:00 WAT / 9pm). No new setups after this.    │
+  ├─────────────────────────┼──────────────────────────────────────────────────┤
+  │ rrRatio                 │ Target RR (informational reference). The actual  │
+  │                         │ check is 2.5–3.0 hardcoded in server.js.        │
+  ├─────────────────────────┼──────────────────────────────────────────────────┤
+  │ riskPercent             │ % of account balance to risk per trade.         │
+  │                         │ Default: 5. WARNING: Do not set above 10.       │
+  │                         │ 5% means on a $500 account, max loss = $25.     │
+  ├─────────────────────────┼──────────────────────────────────────────────────┤
+  │ maxTradeHoldDays        │ (Future use) Max days to hold a trade open.     │
+  └─────────────────────────┴──────────────────────────────────────────────────┘
+
+================================================================================
+  10. UNDERSTANDING THE LOG MESSAGES
+================================================================================
+
+  When the bot is running, you'll see these messages in the terminal.
+  Here is what each one means:
+
+  🧹 [System] Clearing pending queue for a clean start...
+    → Server started. Old signals wiped. Clean state.
+
+  🚀 HS-Bot Bridge Active | Port 3001
+    → Server is running and ready to accept connections from MT5.
+
+  --- 📊 [EURUSD] Scan ---
+  Trends | W1:sell D1:sell H4:buy H1:sell
+  Scores | BUY: 1/4 | SELL: 3/4 | BIAS: SELL
+    → The 5-minute scan ran for EURUSD. 3 of 4 timeframes say "sell".
+      The bot has a SELL bias for this scan.
+
+  ✅ [EURUSD] Multi-TF Alignment: 1H + 4H
+    → The H&S pattern engine found a pattern on H1 AND confirmed it on H4.
+
+  ⏳ [EURUSD] Pattern (sell) does not match Trend Bias (buy).
+    → Pattern was found but it's a sell pattern in a bullish market. Rejected.
+
+  ⏳ [EURUSD] Setup Valid. Monitoring for Neckline Breakout...
+    → A valid H&S pattern was found and the bias matches, but price has not
+      yet broken through the neckline. Bot is watching and will trade when it does.
+
+  📈 [EURUSD] Breakout detected! Calculating RR: 2.75
+    → The neckline broke! RR is 2.75, which is inside the 2.5–3.0 range.
+
+  ⚠️ [EURUSD] Rejected: RR 1.90 is outside 2.5–3.0 range.
+    → Breakout happened but the RR was too low. Signal discarded.
+
+  🎯 [EURUSD] TARGET RR ACHIEVED: 2.80! Sending to Queue.
+    → Signal written to signals.json. MT5 will pick it up on the next tick.
+
+  🚀 [MT5] Executing: EURUSD | SELL | RR: 2.80 | Lot: 0.05 | Balance: $1000
+    → MT5 polled /execute and received the signal. Trade is being placed.
+
+  🚫 [Risk] Weekly trade limit reached. No execution this poll.
+    → 7 trades have already been taken this week. Bot will resume next Monday.
+
+  ⚠️ [EURUSD] Signal expired after 260 min. Discarding.
+    → A signal sat in the queue for over 4 hours without being picked up.
+      It was deleted to prevent entering a stale trade.
+
+  ❌ [EURUSD] Setup Expired: Price already distributed.
+    → A pattern was found but price has already moved far past the neckline.
+      It's too late to enter. Skipped.
+
+  ❌ [EURUSD] Logic Error: Sell TP is above Neckline. Pattern rejected.
+    → The pattern detection found a malformed setup where the math doesn't work.
+      This is a safety guard. The pattern was discarded automatically.
+
+  {status: "outside_hours"}
+    → The scan ran but it's outside the 08:00–21:00 trading window. Normal.
+
+  {status: "scanning"}
+    → Scan completed normally, no pattern found yet. This is the most common
+      message and means everything is working correctly.
+
+================================================================================
+  11. WHAT TO DO WHEN SOMETHING GOES WRONG
+================================================================================
+
+  PROBLEM: "WebRequest Error: 4060" in MT5 Experts tab
+  SOLUTION: Go to Tools → Options → Expert Advisors → Allow WebRequest →
+            Add http://127.0.0.1:3001 → Click [+] → Click OK
+
+  PROBLEM: MT5 EA face is grey (not yellow)
+  SOLUTION: Click the "AutoTrading" button in the MT5 toolbar to enable it.
+            Also check: Tools → Options → Expert Advisors → Allow Automated Trading
+
+  PROBLEM: No log messages appearing at all after attaching EA
+  SOLUTION: Check the "Experts" tab (not Journal) at the bottom of MT5.
+            Make sure the Node.js server is running (you should see port 3001 active).
+
+  PROBLEM: Server starts but immediately crashes with "MODULE NOT FOUND"
+  SOLUTION: Run `npm install` again. A dependency is missing.
+
+  PROBLEM: "Cannot find module './src/riskManagement/risk.js'"
+  SOLUTION: The import path is wrong or the file doesn't exist.
+            Check that risk.js exists at: src/riskManagement/risk.js
+
+  PROBLEM: Bot is scanning but never finding patterns
+  SOLUTION: This is NORMAL — H&S patterns are rare. The bot may scan for
+            days or weeks before finding a valid setup. This is by design.
+            You can verify it's working by checking:
+            http://localhost:3001/status → shows "online"
+            Also check: the BarsToRequest in MT5 EA should be 250.
+
+  PROBLEM: Trades are not being executed even when a signal appears
+  SOLUTION: Check:
+            1. Is AutoTrading enabled in MT5?
+            2. Is the EA face yellow on the chart?
+            3. Is the balance being sent? Look for "Balance: $X" in server logs.
+            4. Is canTrade() returning true? Check closedTrades.json trade count.
+            5. Is it within trading hours?
+
+  PROBLEM: PM2 shows "errored" status
+  SOLUTION: Run `pm2 logs` to see the error message.
+            Common cause: port 3001 is already in use. Run `pm2 delete all`
+            and try `pm2 start pm2.ecosystem.config.cjs` again.
+
+  PROBLEM: Dashboard shows $0 balance
+  SOLUTION: The balance is only updated when MT5 polls /execute.
+            If MT5 is not connected, balance will show 0. This is expected.
+
+================================================================================
+  12. HOW TRADES ARE CALCULATED
+================================================================================
+
+  STOP LOSS PLACEMENT:
+  ────────────────────
+  For a Head & Shoulders (SELL):
+    SL = Right Shoulder High + 0.0005 (0.5 pip buffer above the shoulder)
+    For JPY pairs: SL = Right Shoulder High + 0.05 (5 pip buffer)
+
+  For an Inverted H&S (BUY):
+    SL = Right Shoulder Low − 0.0005 (0.5 pip buffer below the shoulder)
+    For JPY pairs: SL = Right Shoulder Low − 0.05
+
+  TAKE PROFIT PLACEMENT:
+  ──────────────────────
+  The TP is placed at a 1:3 Risk:Reward from the neckline:
+    Risk = |SL − Neckline|
+    TP = Neckline − (Risk × 3)   [for SELL]
+    TP = Neckline + (Risk × 3)   [for BUY]
+
+  LOT SIZE CALCULATION:
+  ─────────────────────
+  Example: Account Balance = $1,000, Risk = 5%, EURUSD, SL = 15 pips
+
+    Risk Amount = $1,000 × 5% = $50
+    SL in pips  = 15 pips
+    Pip value   = $10 per lot per pip (for EURUSD)
+    Lot Size    = $50 ÷ (15 × $10) = $50 ÷ $150 = 0.33 lots
+
+  The bot automatically adjusts:
+  - As your account grows → lot sizes grow
+  - As your account shrinks → lot sizes shrink
+  - Minimum lot size: 0.01 (micro lot)
+
+  THE 2.5–3.0 RR FILTER:
+  ─────────────────────────
+  After calculating where entry, SL, and TP are, the bot checks:
+    Actual RR = (TP distance from entry) ÷ (SL distance from entry)
+
+  If the actual RR is between 2.5 and 3.0: EXECUTE
+  If below 2.5: REJECT (not worth the risk)
+  If above 3.0: REJECT (SL might be too tight or pattern is questionable)
+
+================================================================================
+  13. DEPLOYING TO A VPS — COMPLETE SETUP GUIDE
+      (Do You Need VS Code? What to Install? Will Ports Be the Same?)
+================================================================================
+
+  DO YOU NEED VS CODE ON THE VPS?
+  ─────────────────────────────────
+  NO. VS Code is a code editor — it is for writing and editing code on your
+  own computer. On a VPS you are only RUNNING the bot, not editing it.
+  Everything on a VPS is done through a terminal (command line only). No
+  graphical apps needed.
+
+  ════════════════════════════════════════════════════════════════════════════
+  THE MOST IMPORTANT DECISION: WINDOWS VPS vs LINUX VPS
+  ════════════════════════════════════════════════════════════════════════════
+
+  Before setting anything up, decide which type of VPS you are getting.
+  This determines whether the ports need to change.
+
+  ────────────────────────────────────────────────────────────────────────────
+  OPTION A — WINDOWS VPS  (Recommended for beginners)
+  MT5 and Node.js both run on the SAME Windows VPS
+  ────────────────────────────────────────────────────────────────────────────
+
+  Architecture:
+    [Your Windows VPS]
+       ├── MetaTrader 5     (runs the EA, makes trades)
+       ├── Node.js server   (port 3001)  ← MT5 calls 127.0.0.1:3001
+       └── Next.js dashboard(port 3000)  ← you open in browser via VPS IP
+
+  Port situation: PORTS STAY EXACTLY THE SAME as your local setup.
+    127.0.0.1:3001 works because MT5 and the server are on the same machine.
+    No firewall changes, no code changes, nothing to update.
+
+  Pros:
+    ✅ Everything is the same as running locally — no configuration changes
+    ✅ You access MT5 via Remote Desktop (just like sitting at the computer)
+    ✅ Simplest mental model — one machine does everything
+    ✅ You can close your RDP session and everything keeps running
+
+  Cons:
+    ❌ Windows VPS costs more — typically $15–$25/month
+    ❌ Slightly higher RAM usage (Windows overhead)
+
+  What you need installed on a Windows VPS:
+    - Node.js v20     → download from https://nodejs.org (Windows installer)
+    - Git             → download from https://git-scm.com (Windows installer)
+    - PM2             → installed via terminal: npm install -g pm2
+    - MetaTrader 5    → download from your broker's website
+    - That is all. No VS Code. No anything else.
+
+  ────────────────────────────────────────────────────────────────────────────
+  OPTION B — LINUX VPS  (Cheaper, more common)
+  Node.js runs on the VPS. MT5 stays on your LOCAL Windows PC.
+  ────────────────────────────────────────────────────────────────────────────
+
+  Architecture:
+    [Your Local Windows PC]           [Linux VPS]
+       └── MetaTrader 5  ──────────►  Node.js server (port 3001)
+             (EA must point                └── Dashboard  (port 3000)
+              to VPS IP address)
+
+  Port situation: THE EA URLS MUST CHANGE.
+    Because MT5 and the server are on different machines, 127.0.0.1 no longer
+    works. 127.0.0.1 means "this machine". You must point the EA at the
+    VPS's public IP address instead.
+
+  The ONE code change required in MT5_TradeExecutor.mq5 (lines 13–14):
+
+    BEFORE (works locally):
+      input string ExecuteURL = "http://127.0.0.1:3001/execute";
+      input string CandlesURL = "http://127.0.0.1:3001/candles";
+
+    AFTER (Linux VPS — replace with your actual VPS IP):
+      input string ExecuteURL = "http://YOUR.VPS.IP.HERE:3001/execute";
+      input string CandlesURL = "http://YOUR.VPS.IP.HERE:3001/candles";
+
+  NOTE: You do NOT need to edit the file to do this. When you attach the EA
+  to a chart in MT5, go to the Inputs tab and change the URLs there directly.
+  That is simpler and does not require recompiling.
+
+  You also need to open port 3001 on the VPS firewall (see setup steps below).
+
+  Pros:
+    ✅ Cheaper — typically $5–$10/month
+    ✅ Linux is stable and fast for running Node.js servers
+    ✅ More common for server deployments
+
+  Cons:
+    ❌ MT5 stays on your local PC — your PC must be ON when you want to trade
+    ❌ You must update the EA URLs
+    ❌ Port 3001 must be opened in the firewall
+
+  What you need installed on a Linux VPS:
+    - Node.js v20   (installed via terminal command — see steps below)
+    - Git           (installed via terminal — usually pre-installed)
+    - PM2           (installed via terminal: npm install -g pm2)
+    - That is all. No VS Code. No MetaTrader. No GUI apps of any kind.
+
+  ════════════════════════════════════════════════════════════════════════════
+  REFERENCE TABLE — What Changes Between Local, Windows VPS, Linux VPS
+  ════════════════════════════════════════════════════════════════════════════
+
+    Item                  | Local (now)        | Windows VPS        | Linux VPS
+    ──────────────────────┼────────────────────┼────────────────────┼─────────────────────
+    MT5 EA URLs           | 127.0.0.1:3001     | 127.0.0.1:3001 ✅  | VPS_IP:3001 ⚠️
+    Server port           | 3001               | 3001               | 3001
+    Dashboard port        | 3000               | 3000               | 3000
+    Start command         | npm run dev        | npm run start:prod | npm run start:prod
+    VS Code needed        | Yes (editing only) | ❌ No              | ❌ No
+    MT5 location          | Local PC           | On the VPS         | Local PC
+    Push to GitHub first? | —                  | Yes                | Yes
+    Open port 3001 (fw)   | Not needed         | Not needed         | ⚠️ Yes
+    Open port 3000 (fw)   | Not needed         | Recommended        | Recommended
+
+  ════════════════════════════════════════════════════════════════════════════
+  FULL STEP-BY-STEP: WINDOWS VPS SETUP
+  ════════════════════════════════════════════════════════════════════════════
+
+  HOW GITHUB WORKS WITH YOUR VPS (ONE-WAY ONLY):
+  ──────────────────────────────────────────────────
+  You NEVER push code *from* your VPS. The flow is strictly one-way:
+
+  1. On your LOCAL PC (where code is stored): You PUSH your code up to GitHub.
+  2. On your WINDOWS VPS (where the bot runs): You only CLONE (download) the code down from GitHub.
+
+  Once downloaded onto the VPS, you don't touch GitHub on the VPS again.
+  The VPS will run MT5 + Node.js 24/7 completely independently, even when 
+  your local computer is powered off.
+
+  (Alternative: If you don't want to use GitHub at all, you can simply Copy/Paste
+   the project folder directly from your PC onto the Windows VPS desktop screen
+   over Remote Desktop!)
+
+  STEP 1 — Log into the VPS via Remote Desktop
+    Open "Remote Desktop Connection" on your Windows PC (search in Start menu)
+    Enter your VPS IP address
+    Enter the username and password your VPS provider gave you
+    → A Windows desktop will appear — this IS the VPS
+
+  STEP 2 — Install Node.js on the VPS
+    Open a browser on the VPS, go to https://nodejs.org
+    Download and install the LTS version (same as installing on your own PC)
+    Verify: open Command Prompt, type: node --version
+    You should see: v20.x.x or higher
+
+  STEP 3 — Install Git on the VPS
+    Go to https://git-scm.com, download and install Git for Windows
+    Verify: git --version
+
+  STEP 4 — Clone the project from GitHub
+    Open Command Prompt on the VPS:
+    git clone https://github.com/YOUR_USERNAME/HS-UI.bot.git
+    cd HS-UI.bot
+
+  STEP 5 — Install dependencies and build the dashboard
+    npm install
+    npm run build
+    (build takes 1–3 minutes, only needed once or after UI changes)
+
+  STEP 6 — Install PM2 and start the bot
+    npm install -g pm2
+    npm run start:prod
+
+  STEP 7 — Verify both processes are running
+    pm2 status
+    You should see hs-bot-server (online) and hs-dashboard (online)
+
+  STEP 8 — Make PM2 survive a VPS reboot (IMPORTANT)
+    pm2 startup
+    Copy the command it prints and run it (it will look like:
+    pm2 startup powershell -u Administrator --hp C:\Users\Administrator)
+    pm2 save
+
+  STEP 9 — Install MetaTrader 5 on the VPS
+    Download from your broker's website and install normally
+    Follow Section 6 of this guide exactly — all steps are the same
+    The EA URLs stay as http://127.0.0.1:3001 — do not change them
+
+  STEP 10 — Close Remote Desktop
+    You can now close the RDP window. Everything keeps running on the VPS.
+    MT5 will continue running in the background as long as the VPS is on.
+
+  STEP 11 — Verify the bot is working from your browser
+    Open http://YOUR_VPS_IP:3000 in your browser
+    You should see the dashboard
+    Also check: http://YOUR_VPS_IP:3001/status
+
+  ════════════════════════════════════════════════════════════════════════════
+  FULL STEP-BY-STEP: LINUX VPS SETUP
+  ════════════════════════════════════════════════════════════════════════════
+
+  BEFORE YOU START: Push your code to GitHub from your local PC (see above).
+
+  STEP 1 — Connect to the VPS via SSH
+    On Windows, open PowerShell or download PuTTY (https://putty.org)
+    Type: ssh root@YOUR_VPS_IP
+    Enter your VPS password when prompted
+    → You are now inside the VPS terminal
+
+  STEP 2 — Install Node.js v20
+    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+    sudo apt-get install -y nodejs
+    Verify: node --version  (should show v20.x.x)
+
+  STEP 3 — Install Git (if not already present)
+    sudo apt-get install -y git
+    Verify: git --version
+
+  STEP 4 — Install PM2
+    npm install -g pm2
+    Verify: pm2 --version
+
+  STEP 5 — Clone the project from GitHub
+    git clone https://github.com/YOUR_USERNAME/HS-UI.bot.git
+    cd HS-UI.bot
+
+  STEP 6 — Install dependencies
+    npm install
+
+  STEP 7 — Build the Next.js dashboard
+    npm run build
+    (This compiles the dashboard for production. Takes 1–3 minutes.)
+
+  STEP 8 — Open the firewall ports
+    sudo ufw allow 3000    ← dashboard (you access this in browser)
+    sudo ufw allow 3001    ← bot server (MT5 sends data here from your PC)
+    sudo ufw allow 22      ← SSH (keep this open or you lose access!)
+    sudo ufw enable
+    sudo ufw status        ← verify the ports are listed as ALLOW
+
+  STEP 9 — Start both processes with PM2
+    npm run start:prod
+    pm2 status             ← both should show "online"
+
+  STEP 10 — Survive reboots
+    pm2 startup
+    (Copy the full command it prints and run it. It looks like:
+     sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u root --hp /root)
+    pm2 save
+
+  STEP 11 — Update MT5 EA on your LOCAL PC (the URL change)
+    In MetaTrader 5 on your local machine:
+    - Double-click the EA on the chart (or drag it from Navigator again)
+    - Go to the "Inputs" tab
+    - Change ExecuteURL to: http://YOUR_VPS_IP:3001/execute
+    - Change CandlesURL to: http://YOUR_VPS_IP:3001/candles
+    - Click OK
+
+    NOTE: You also need to add this URL to MT5's allowed list:
+    Tools → Options → Expert Advisors → Allow WebRequest for listed URL
+    Add: http://YOUR_VPS_IP:3001
+
+  STEP 12 — Verify everything is connected
+    On your LOCAL PC, check the MT5 Experts tab.
+    You should see scan responses appearing every 5 minutes:
+    "📤 [EURUSD] Scan response: {"status":"scanning"}"
+
+    From your browser, open:
+    http://YOUR_VPS_IP:3000  → dashboard
+    http://YOUR_VPS_IP:3001/status  → health check
+
+  ════════════════════════════════════════════════════════════════════════════
+  USEFUL PM2 COMMANDS (works on both Windows and Linux VPS)
+  ════════════════════════════════════════════════════════════════════════════
+
+    pm2 status               → see if both processes are running
+    pm2 logs                 → see live output from both (Ctrl+C to exit)
+    pm2 logs hs-bot-server   → logs from the bot only
+    pm2 logs hs-dashboard    → logs from the dashboard only
+    npm run logs             → same as pm2 logs (shortcut in package.json)
+    npm run monitor          → live CPU/memory monitor (q to quit)
+    pm2 restart all          → restart both (use after updating the code)
+    pm2 stop all             → stop everything
+    pm2 start pm2.ecosystem.config.cjs  → start everything (same as npm run start:prod)
+    pm2 delete all           → remove from PM2 (your files are not deleted)
+    pm2 save                 → save current process list (run after any change)
+
+  HOW TO UPDATE THE BOT AFTER MAKING CODE CHANGES:
+  ─────────────────────────────────────────────────
+  On your local PC:
+    git add .
+    git commit -m "your change description"
+    git push
+
+  On the VPS (SSH in, then):
+    cd HS-UI.bot
+    git pull
+    npm install                ← only if package.json changed
+    npm run build              ← only if you changed dashboard files in app/
+    pm2 restart all
+
+================================================================================
+  END OF GUIDE
+  HS-Bot v1.0 — Head & Shoulders Automated Forex Trader
+================================================================================

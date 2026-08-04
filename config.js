@@ -5,6 +5,6 @@ export const config = {
   minDaysBetweenTrades: 0,
   tradingHours: { start: 8, end: 21 }, // GMT+1
   rrRatio: 3,
-  riskPercent: 20,  // 5% risk per trade
+  riskPercent: 5,   // 5% risk per trade
   maxTradeHoldDays: 7
 };

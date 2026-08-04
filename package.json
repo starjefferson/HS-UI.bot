@@ -4,9 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev",
+    "dev:server": "node server.js",
+    "dev:ui": "next dev",
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:ui\"",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "start:prod": "pm2 start pm2.ecosystem.config.cjs",
+    "logs": "pm2 logs",
+    "monitor": "pm2 monit"
   },
   "dependencies": {
     "body-parser": "^2.2.1",
@@ -20,6 +25,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.18",
     "autoprefixer": "^10.4.23",
+    "concurrently": "^9.2.4",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.18"
   }
