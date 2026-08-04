@@ -26,7 +26,7 @@ export function detectPatterns(candles) {
 function findHS(mainData, supportData, type, candles) {
     let extrema = [];
     const radius = 5;
-    const limit  = mainData.length - radius; // Use full array, not hardcoded 200
+    const limit  = mainData.length - radius;
 
     for (let i = radius; i < limit; i++) {
         const window = mainData.slice(i - radius, i + radius + 1);
@@ -53,7 +53,6 @@ function findHS(mainData, supportData, type, candles) {
     const jpyBuffer = 0.05;
 
     // Use the real candle timestamp (Unix seconds from MT5) as the pattern fingerprint.
-    // Falls back to the array index if `time` is not present (e.g., test data).
     const headTime = candles?.[head.idx]?.time ?? head.idx;
 
     if (type === "sell") {
@@ -64,9 +63,13 @@ function findHS(mainData, supportData, type, candles) {
             const nHigh = Math.max(trough1, trough2);
             const nLow  = Math.min(trough1, trough2);
 
-            // SL is just above the Right Shoulder
-            const slPrice    = s2.val + (s2.val > 50 ? jpyBuffer : pipBuffer);
-            const riskAmount = slPrice - nLow;
+            // SL is placed just above the Right Shoulder
+            const slPrice = s2.val + (s2.val > 50 ? jpyBuffer : pipBuffer);
+            const entryPrice = nLow; // Breakout level at neckline
+
+            // Calculate TP based on Historical Support Zones & RR Rules
+            const tpResult = calculateHistoricalTP(candles, entryPrice, slPrice, "sell");
+            if (!tpResult) return null; // Rejected: Key Support is too close (RR < 2.5)
 
             return {
                 type: "sell",
@@ -74,7 +77,8 @@ function findHS(mainData, supportData, type, candles) {
                 necklineHigh: nHigh,
                 necklineLow:  nLow,
                 sl: slPrice,
-                tp: nLow - (riskAmount * 3), // 1:3 base — server validates actual RR
+                tp: tpResult.tp,
+                targetRR: tpResult.rr,
                 headTime,
             };
         }
@@ -86,9 +90,13 @@ function findHS(mainData, supportData, type, candles) {
             const nHigh = Math.max(peak1, peak2);
             const nLow  = Math.min(peak1, peak2);
 
-            // SL is just below the Right Shoulder
-            const slPrice    = s2.val - (s2.val > 50 ? jpyBuffer : pipBuffer);
-            const riskAmount = nHigh - slPrice;
+            // SL is placed just below the Right Shoulder
+            const slPrice = s2.val - (s2.val > 50 ? jpyBuffer : pipBuffer);
+            const entryPrice = nHigh; // Breakout level at neckline
+
+            // Calculate TP based on Historical Resistance Zones & RR Rules
+            const tpResult = calculateHistoricalTP(candles, entryPrice, slPrice, "buy");
+            if (!tpResult) return null; // Rejected: Key Resistance is too close (RR < 2.5)
 
             return {
                 type: "buy",
@@ -96,10 +104,93 @@ function findHS(mainData, supportData, type, candles) {
                 necklineHigh: nHigh,
                 necklineLow:  nLow,
                 sl: slPrice,
-                tp: nHigh + (riskAmount * 3), // 1:3 base — server validates actual RR
+                tp: tpResult.tp,
+                targetRR: tpResult.rr,
                 headTime,
             };
         }
     }
     return null;
+}
+
+/**
+ * Historical Support & Resistance TP Calculation:
+ * 1. Scans past candles for historical swing Lows (Support for SELL) or swing Highs (Resistance for BUY).
+ * 2. Identifies the nearest key historical zone in the path of the trade.
+ * 3. RR Rules:
+ *    - If Key Zone RR > 3.0: Caps TP at exactly 3.0 RR.
+ *    - If Key Zone RR < 2.5: Returns null (Rejects trade because a key zone is blocking profit before 2.5 RR).
+ *    - If 2.5 <= RR <= 3.0: Snaps TP directly to the historical Support/Resistance zone!
+ */
+function calculateHistoricalTP(candles, entryPrice, slPrice, type) {
+    const risk = Math.abs(entryPrice - slPrice);
+    if (risk <= 0) return null;
+
+    const radius = 5;
+    let keyZone = null;
+
+    if (type === "sell") {
+        // Find historical swing lows (support zones) BELOW entry price
+        let supportZones = [];
+        for (let i = radius; i < candles.length - radius; i++) {
+            const windowLows = candles.slice(i - radius, i + radius + 1).map(c => c.low);
+            if (candles[i].low === Math.min(...windowLows) && candles[i].low < entryPrice) {
+                supportZones.push(candles[i].low);
+            }
+        }
+
+        // The first support level price encounters going down is the HIGHEST support below entry
+        if (supportZones.length > 0) {
+            keyZone = Math.max(...supportZones);
+        }
+
+        let targetTP = keyZone ? keyZone : (entryPrice - (risk * 3.0));
+        let reward = entryPrice - targetTP;
+        let rr = reward / risk;
+
+        // Cap rule: If RR > 3.0, cap TP at exactly 3.0 RR
+        if (rr > 3.0) {
+            targetTP = entryPrice - (risk * 3.0);
+            rr = 3.0;
+        }
+
+        // Reject rule: If nearest support is too close (RR < 2.5), trade is blocked by support -> Reject
+        if (rr < 2.5) {
+            return null;
+        }
+
+        return { tp: targetTP, rr };
+
+    } else {
+        // Find historical swing highs (resistance zones) ABOVE entry price
+        let resistanceZones = [];
+        for (let i = radius; i < candles.length - radius; i++) {
+            const windowHighs = candles.slice(i - radius, i + radius + 1).map(c => c.high);
+            if (candles[i].high === Math.max(...windowHighs) && candles[i].high > entryPrice) {
+                resistanceZones.push(candles[i].high);
+            }
+        }
+
+        // The first resistance level price encounters going up is the LOWEST resistance above entry
+        if (resistanceZones.length > 0) {
+            keyZone = Math.min(...resistanceZones);
+        }
+
+        let targetTP = keyZone ? keyZone : (entryPrice + (risk * 3.0));
+        let reward = targetTP - entryPrice;
+        let rr = reward / risk;
+
+        // Cap rule: If RR > 3.0, cap TP at exactly 3.0 RR
+        if (rr > 3.0) {
+            targetTP = entryPrice + (risk * 3.0);
+            rr = 3.0;
+        }
+
+        // Reject rule: If nearest resistance is too close (RR < 2.5), trade is blocked by resistance -> Reject
+        if (rr < 2.5) {
+            return null;
+        }
+
+        return { tp: targetTP, rr };
+    }
 }

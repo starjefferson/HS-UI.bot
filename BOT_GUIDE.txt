@@ -806,12 +806,37 @@
     SL = Right Shoulder Low − 0.0005 (0.5 pip buffer below the shoulder)
     For JPY pairs: SL = Right Shoulder Low − 0.05
 
-  TAKE PROFIT PLACEMENT:
-  ──────────────────────
-  The TP is placed at a 1:3 Risk:Reward from the neckline:
-    Risk = |SL − Neckline|
-    TP = Neckline − (Risk × 3)   [for SELL]
-    TP = Neckline + (Risk × 3)   [for BUY]
+  TAKE PROFIT (TP) PLACEMENT — HISTORICAL S/R ZONES:
+  ──────────────────────────────────────────────────────
+  The TP is NOT just a random 1:3 formula. The bot scans past price history 
+  for key Support & Resistance zones:
+
+  1. For a SELL (Head & Shoulders):
+     - Scans past candles for historical swing Lows (Support zones) below entry.
+     - Identifies the nearest key Support zone in the path of the trade.
+     - Snaps the initial TP target directly to that key Support zone!
+
+  2. For a BUY (Inverted H&S):
+     - Scans past candles for historical swing Highs (Resistance zones) above entry.
+     - Identifies the nearest key Resistance zone in the path of the trade.
+     - Snaps the initial TP target directly to that key Resistance zone!
+
+  3. RR CAPPING & REJECTION RULES:
+     Once the TP is snapped to the historical Support/Resistance zone, the bot 
+     calculates the Risk:Reward (RR = TP distance ÷ SL distance):
+
+     - IF RR > 3.0: 
+       The key zone is far away. The bot CAPS the TP at exactly 3.0 RR so it 
+       does not greedily target unreasonable targets.
+
+     - IF RR < 2.5: 
+       A key Support or Resistance level is blocking the path before 2.5 RR 
+       can be achieved. The trade is REJECTED (NO TRADE) because taking it 
+       would mean risking money against a blocking historical level.
+
+     - IF 2.5 <= RR <= 3.0: 
+       PERFECT TRADE! TP is placed directly at the historical Support/Resistance 
+       level.
 
   LOT SIZE CALCULATION:
   ─────────────────────
@@ -826,15 +851,6 @@
   - As your account grows → lot sizes grow
   - As your account shrinks → lot sizes shrink
   - Minimum lot size: 0.01 (micro lot)
-
-  THE 2.5–3.0 RR FILTER:
-  ─────────────────────────
-  After calculating where entry, SL, and TP are, the bot checks:
-    Actual RR = (TP distance from entry) ÷ (SL distance from entry)
-
-  If the actual RR is between 2.5 and 3.0: EXECUTE
-  If below 2.5: REJECT (not worth the risk)
-  If above 3.0: REJECT (SL might be too tight or pattern is questionable)
 
 ================================================================================
   13. DEPLOYING TO A VPS — COMPLETE SETUP GUIDE
