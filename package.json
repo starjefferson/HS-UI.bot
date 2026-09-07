@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev:server": "node server.js",
+    "dev:server": "node index.js",
     "dev:ui": "next dev",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:ui\"",
     "build": "next build",
@@ -14,13 +14,17 @@
     "monitor": "pm2 monit"
   },
   "dependencies": {
+    "axios": "^1.8.2",
     "body-parser": "^2.2.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
     "express": "^5.2.1",
     "framer-motion": "^12.23.26",
     "lucide-react": "^0.562.0",
     "next": "^16.1.1",
     "react": "^19.2.3",
-    "react-dom": "^19.2.3"
+    "react-dom": "^19.2.3",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.18",

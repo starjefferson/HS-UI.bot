@@ -1,0 +1,90 @@
+================================================================================
+          OANDA STANDALONE AUTOMATED H&S TRADING BOT - SETUP & OPERATING MANUAL
+================================================================================
+
+1. OVERVIEW
+--------------------------------------------------------------------------------
+This project is an autonomous Head & Shoulders algorithmic trading bot that interacts
+directly with OANDA's v20 REST API. It requires NO MetaTrader 5 (MT5), NO Expert
+Advisors (EA), and NO desktop trading terminals.
+
+It runs continuously in Node.js, scanning market candles, enforcing top-down trend
+alignment, detecting structural patterns, and executing trades directly to OANDA.
+
+
+2. OANDA ACCOUNT SETUP & API KEY GENERATION
+--------------------------------------------------------------------------------
+Step 1: Create an Account
+  - Go to https://www.oanda.com and create a Live Account or a Free Demo/Practice Account.
+
+Step 2: Generate Your API Token
+  - Log in to the OANDA Account Portal (https://hub.oanda.com).
+  - Go to "Manage API Access" -> "Generate Token".
+  - Copy the generated API Token. (Keep this token secure!).
+
+Step 3: Get Your Account ID
+  - In your OANDA dashboard, locate your Account ID (Formatted like: 101-001-XXXXXXX-001).
+
+
+3. LOCAL ENVIRONMENT CONFIGURATION
+--------------------------------------------------------------------------------
+Step 1: Install Dependencies
+  Open your project terminal and run:
+    npm install
+
+Step 2: Configure Environment Variables
+  Create a file named `.env.local` in the root folder of your project:
+
+    OANDA_API_KEY=your_oanda_api_token_here
+    OANDA_ACCOUNT_ID=101-001-XXXXXXX-001
+    OANDA_ENVIRONMENT=practice
+    RISK_PERCENT=2.0
+    MIN_RR=2.5
+    MAX_RR=3.0
+    POLL_INTERVAL_SECONDS=60
+
+  Notes:
+    - Set `OANDA_ENVIRONMENT=practice` for Demo or `live` for Real Trading.
+    - `POLL_INTERVAL_SECONDS` defines how often the bot scans for new candles.
+
+
+4. RUNNING THE BOT
+--------------------------------------------------------------------------------
+To start the bot in development/testing mode:
+  npm start
+
+To run the bot in 24/7 background mode (Recommended):
+  Install PM2 globally:
+    npm install -g pm2
+
+  Start the application with PM2:
+    pm2 start index.js --name "oanda-hs-bot"
+
+  Save the process list so it automatically restarts on system reboot:
+    pm2 save
+    pm2 startup
+
+
+5. CLOUD / 24/7 HOSTING OPTIONS (NO WINDOWS REQUIRED)
+--------------------------------------------------------------------------------
+Since MT5 is no longer required, you do NOT need a Windows VPS! You can host this
+bot on any low-cost Linux cloud provider:
+
+  Option A: Linux VPS (DigitalOcean, Vultr, Linode, AWS EC2) - $4/month
+    1. SSH into your Linux instance.
+    2. Install Node.js & Git.
+    3. Clone your code, add `.env.local`, and run via `pm2`.
+
+  Option B: Cloud App Hosting (Render.com / Railway.app)
+    1. Push your repository to GitHub (Ensure `.env.local` is in `.gitignore`).
+    2. Create a Background Worker service on Render/Railway connected to your repository.
+    3. Add environment variables in the cloud provider's web console.
+
+
+6. LOGS & FILE MEMORY
+--------------------------------------------------------------------------------
+- `history.json`: Records all executed setups to prevent re-entering identical 
+  pattern fingerprints (Pattern Fingerprinting Guard).
+- Live Console Output: Displays real-time 3/4 SMA Trend Scores, active biases, 
+  pattern detection logs, and OANDA order fill responses.
+================================================================================
