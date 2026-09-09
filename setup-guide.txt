@@ -1,29 +1,42 @@
 ================================================================================
-          OANDA STANDALONE AUTOMATED H&S TRADING BOT - SETUP & OPERATING MANUAL
+      DERIV DIRECT API HEAD & SHOULDERS TRADING BOT - SETUP & OPERATING MANUAL
 ================================================================================
 
 1. OVERVIEW
 --------------------------------------------------------------------------------
-This project is an autonomous Head & Shoulders algorithmic trading bot that interacts
-directly with OANDA's v20 REST API. It requires NO MetaTrader 5 (MT5), NO Expert
-Advisors (EA), and NO desktop trading terminals.
+This project is an autonomous Head & Shoulders algorithmic trading bot that
+connects DIRECTLY to Deriv's WebSocket API (wss://ws.derivws.com).
 
-It runs continuously in Node.js, scanning market candles, enforcing top-down trend
-alignment, detecting structural patterns, and executing trades directly to OANDA.
+It requires NO MetaTrader 5 (MT5), NO Expert Advisors (EA), and NO desktop
+trading terminals. Everything runs in Node.js and communicates with Deriv
+via live WebSocket connections.
+
+It runs continuously, scanning market candles, enforcing top-down trend
+alignment, detecting structural H&S patterns, and executing trades directly
+to your Deriv account.
+
+Architecture:
+  - Bot Engine   → index.js       (standalone Node.js process, hourly loop)
+  - Dashboard UI → app/           (Next.js + React, live data from history.json)
+  - Both processes managed by PM2 on your Linux VPS.
 
 
-2. OANDA ACCOUNT SETUP & API KEY GENERATION
+2. DERIV ACCOUNT SETUP & API TOKEN GENERATION
 --------------------------------------------------------------------------------
 Step 1: Create an Account
-  - Go to https://www.oanda.com and create a Live Account or a Free Demo/Practice Account.
+  - Go to https://deriv.com and create a Real or Demo account.
 
 Step 2: Generate Your API Token
-  - Log in to the OANDA Account Portal (https://hub.oanda.com).
-  - Go to "Manage API Access" -> "Generate Token".
-  - Copy the generated API Token. (Keep this token secure!).
+  - Log in to your Deriv account.
+  - Go to: Account Settings → Security & Limits → API Token
+    (Direct link: https://app.deriv.com/account/api-token)
+  - Create a token with these scopes: Read, Trade, Payments, Admin
+  - Copy the generated token. (Keep this token secure! Treat it like a password.)
 
-Step 3: Get Your Account ID
-  - In your OANDA dashboard, locate your Account ID (Formatted like: 101-001-XXXXXXX-001).
+Step 3: Get Your App ID
+  - The default App ID is 1089 (Deriv's public demo app ID).
+  - For production, register your own App ID at: https://api.deriv.com/app-registration
+  - Using your own App ID is recommended to avoid shared rate limits.
 
 
 3. LOCAL ENVIRONMENT CONFIGURATION
@@ -33,58 +46,106 @@ Step 1: Install Dependencies
     npm install
 
 Step 2: Configure Environment Variables
-  Create a file named `.env.local` in the root folder of your project:
+  Edit the file named `.env.local` in the root folder of your project:
 
-    OANDA_API_KEY=your_oanda_api_token_here
-    OANDA_ACCOUNT_ID=101-001-XXXXXXX-001
-    OANDA_ENVIRONMENT=practice
-    RISK_PERCENT=2.0
+    DERIV_APP_ID=1089
+    DERIV_API_TOKEN=your_deriv_api_token_here
+
+    # Risk & Strategy Configuration
+    RISK_PERCENT=5.0
     MIN_RR=2.5
     MAX_RR=3.0
     POLL_INTERVAL_SECONDS=60
 
   Notes:
-    - Set `OANDA_ENVIRONMENT=practice` for Demo or `live` for Real Trading.
-    - `POLL_INTERVAL_SECONDS` defines how often the bot scans for new candles.
+    - Replace `your_deriv_api_token_here` with your real Deriv API token.
+    - Set RISK_PERCENT to the percentage of balance to stake per trade (default: 5%).
+    - MIN_RR and MAX_RR define the acceptable Risk-to-Reward range (default: 2.5–3.0).
+    - The bot also enforces weekly trade limits defined in config.js (maxTradesPerWeek).
 
 
 4. RUNNING THE BOT
 --------------------------------------------------------------------------------
-To start the bot in development/testing mode:
-  npm start
+Development mode (both bot + UI together):
+  npm run dev
 
-To run the bot in 24/7 background mode (Recommended):
-  Install PM2 globally:
+Bot engine only:
+  npm run dev:server
+
+Dashboard UI only:
+  npm run dev:ui
+
+To run in 24/7 background mode on Linux (Recommended):
+  Step 1: Build the Next.js UI first:
+    npm run build
+
+  Step 2: Install PM2 globally:
     npm install -g pm2
 
-  Start the application with PM2:
-    pm2 start index.js --name "oanda-hs-bot"
+  Step 3: Start both processes with PM2:
+    npm run start:prod
 
-  Save the process list so it automatically restarts on system reboot:
+  Step 4: Save the process list for auto-restart on reboot:
     pm2 save
     pm2 startup
+    (Follow the printed instructions to enable the startup script.)
+
+  Useful PM2 commands:
+    pm2 list              → List running processes and status
+    npm run logs          → Stream live logs (bot + UI)
+    npm run monitor       → Open PM2 monitoring dashboard
+    pm2 restart hs-bot    → Restart just the trading bot
+    pm2 restart hs-ui     → Restart just the dashboard UI
+    pm2 stop all          → Stop all processes
 
 
-5. CLOUD / 24/7 HOSTING OPTIONS (NO WINDOWS REQUIRED)
+5. CLOUD / 24/7 HOSTING OPTIONS
 --------------------------------------------------------------------------------
-Since MT5 is no longer required, you do NOT need a Windows VPS! You can host this
-bot on any low-cost Linux cloud provider:
+This bot runs on any Linux environment. No Windows required.
 
-  Option A: Linux VPS (DigitalOcean, Vultr, Linode, AWS EC2) - $4/month
+  Option A: Linux VPS (DigitalOcean, Vultr, Linode, AWS EC2) - $4-6/month
     1. SSH into your Linux instance.
-    2. Install Node.js & Git.
-    3. Clone your code, add `.env.local`, and run via `pm2`.
+    2. Install Node.js v20+ and Git:
+         curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+         sudo apt-get install -y nodejs git
+    3. Clone your repository:
+         git clone <your-repo-url> && cd HS-UI.bot
+    4. Install dependencies:
+         npm install
+    5. Create .env.local with your real credentials:
+         nano .env.local
+    6. Build the UI:
+         npm run build
+    7. Start via PM2:
+         npm run start:prod
+         pm2 save && pm2 startup
 
   Option B: Cloud App Hosting (Render.com / Railway.app)
-    1. Push your repository to GitHub (Ensure `.env.local` is in `.gitignore`).
-    2. Create a Background Worker service on Render/Railway connected to your repository.
-    3. Add environment variables in the cloud provider's web console.
+    1. Push your repository to GitHub.
+       (Ensure .env.local is NOT committed — it is already in .gitignore.)
+    2. Create a Background Worker service connected to your repository.
+       Set the start command to: node index.js
+    3. Create a separate Web Service for the UI.
+       Set the build command to: npm run build
+       Set the start command to: npm start
+    4. Add your environment variables in the cloud provider's settings dashboard.
 
 
 6. LOGS & FILE MEMORY
 --------------------------------------------------------------------------------
-- `history.json`: Records all executed setups to prevent re-entering identical 
-  pattern fingerprints (Pattern Fingerprinting Guard).
-- Live Console Output: Displays real-time 3/4 SMA Trend Scores, active biases, 
-  pattern detection logs, and OANDA order fill responses.
+- `history.json`: Records all executed trades. Used by the Pattern Fingerprinting
+  Guard to prevent re-entering identical setups across scan cycles.
+- `logs/hs-bot-out.log`: PM2 stdout log for the trading bot.
+- `logs/hs-bot-error.log`: PM2 error log for the trading bot.
+- `logs/hs-ui-out.log`: PM2 stdout log for the dashboard UI.
+- Live Console Output: Displays real-time 3/4 SMA Trend Scores, active biases,
+  pattern detection logs, canTrade() risk checks, and Deriv order responses.
+
+
+7. IMPORTANT SECURITY NOTES
+--------------------------------------------------------------------------------
+- NEVER commit .env.local to Git. It is already excluded in .gitignore.
+- NEVER share your Deriv API token publicly.
+- Start with a Demo account to verify the bot is working before switching to live.
+- The bot will use RISK_PERCENT of your balance per trade. Start conservatively.
 ================================================================================

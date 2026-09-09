@@ -2,6 +2,7 @@ import fs from "fs";
 import dotenv from "dotenv";
 import { getCandles, getAccountBalance, placeOrder } from "./src/derivApi.js";
 import { runDetection } from "./src/patternDetection/patternEngine.js";
+import { canTrade } from "./src/riskManagement/risk.js";
 
 dotenv.config({ path: ".env.local" });
 
@@ -120,7 +121,13 @@ async function runTradingCycle() {
         continue;
       }
 
-      // 8. Order Execution via Deriv
+      // 8. Trade Frequency & Cooldown Guard
+      if (!canTrade()) {
+        console.log(`🚫 [${symbol}] Risk Manager: Weekly trade limit or cooldown active. Skipping.`);
+        continue;
+      }
+
+      // 9. Order Execution via Deriv
       const stakeAmount = balance * (RISK_PERCENT / 100);
       console.log(`🎯 [${symbol}] TARGET RR ACHIEVED (${rr.toFixed(2)}). Placing Deriv Order ($${stakeAmount.toFixed(2)} Stake)...`);
 

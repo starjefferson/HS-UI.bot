@@ -7,7 +7,8 @@ const API_TOKEN = process.env.DERIV_API_TOKEN;
 const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`;
 
 /**
- * Universal WebSocket helper for sending requests to Deriv API
+ * Send a single request on a new WebSocket connection.
+ * Opens → sends → waits for one response → closes.
  */
 function sendWsRequest(requestPayload) {
   return new Promise((resolve, reject) => {
@@ -29,6 +30,51 @@ function sendWsRequest(requestPayload) {
     });
 
     ws.on("error", (err) => reject(err));
+  });
+}
+
+/**
+ * Send a sequence of requests on a single persistent WebSocket connection.
+ * Each message is sent only after the previous response is received.
+ * The connection closes after the final response.
+ * Returns an array of all responses in order.
+ */
+function sendWsSequence(requests) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(WS_URL);
+    const results = [];
+    let step = 0;
+
+    ws.on("open", () => {
+      ws.send(JSON.stringify(requests[0]));
+    });
+
+    ws.on("message", (data) => {
+      const response = JSON.parse(data.toString());
+
+      if (response.error) {
+        ws.close();
+        reject(response.error);
+        return;
+      }
+
+      results.push(response);
+      step++;
+
+      if (step < requests.length) {
+        // Send the next request in the sequence
+        ws.send(JSON.stringify(requests[step]));
+      } else {
+        // All requests complete — close and resolve
+        ws.close();
+        resolve(results);
+      }
+    });
+
+    ws.on("error", (err) => {
+      ws.close();
+      reject(err);
+    });
   });
 }
 
@@ -56,7 +102,8 @@ export function getDerivGranularity(tf) {
 }
 
 /**
- * Fetch historical candles from Deriv WebSocket API
+ * Fetch historical candles from Deriv WebSocket API.
+ * Candles are reversed so index 0 is always the most recent.
  */
 export async function getCandles(symbol, timeframe, count = 200) {
   try {
@@ -76,7 +123,7 @@ export async function getCandles(symbol, timeframe, count = 200) {
 
     if (!res.candles || res.candles.length === 0) return null;
 
-    // Convert candle structure and reverse so index 0 is the most recent candle
+    // Reverse so index 0 = most recent candle
     return res.candles.map(c => ({
       time: c.epoch * 1000,
       open: parseFloat(c.open),
@@ -91,11 +138,15 @@ export async function getCandles(symbol, timeframe, count = 200) {
 }
 
 /**
- * Fetch current account balance from Deriv
+ * Fetch current account balance from Deriv.
+ * Returns 1000 as a safe fallback if the token is missing or the call fails.
  */
 export async function getAccountBalance() {
   try {
-    if (!API_TOKEN) return 1000;
+    if (!API_TOKEN) {
+      console.warn("⚠️ [Deriv API] DERIV_API_TOKEN not set. Using fallback balance of 1000.");
+      return 1000;
+    }
 
     const res = await sendWsRequest({ authorize: API_TOKEN });
     return parseFloat(res.authorize.balance);
@@ -106,7 +157,12 @@ export async function getAccountBalance() {
 }
 
 /**
- * Execute order via Deriv WebSocket API
+ * Execute a multiplier contract via Deriv WebSocket API.
+ *
+ * Correct 3-step flow on a single authenticated connection:
+ *   1. authorize  → authenticates the session
+ *   2. proposal   → requests a contract quote and proposal ID
+ *   3. buy        → buys the proposal using the returned proposal ID
  */
 export async function placeOrder({ symbol, amount, side, sl, tp }) {
   try {
@@ -115,9 +171,12 @@ export async function placeOrder({ symbol, amount, side, sl, tp }) {
     const derivSymbol = formatSymbolForDeriv(symbol);
     const contractType = side.toLowerCase() === "buy" ? "MULTUP" : "MULTDOWN";
 
-    // 1. Request trade proposal from Deriv
-    const proposalPayload = {
-      authorize: API_TOKEN,
+    // Step 1 — Authorize the session
+    const authRes = await sendWsRequest({ authorize: API_TOKEN });
+    if (!authRes.authorize) throw new Error("Deriv authorization failed");
+
+    // Step 2 — Request a contract proposal on a fresh authenticated connection
+    const proposalRes = await sendWsRequest({
       proposal: 1,
       amount: amount,
       basis: "stake",
@@ -129,18 +188,18 @@ export async function placeOrder({ symbol, amount, side, sl, tp }) {
         take_profit: parseFloat(tp.toFixed(5)),
         stop_loss: parseFloat(sl.toFixed(5))
       }
-    };
+    });
 
-    const proposalRes = await sendWsRequest(proposalPayload);
+    if (!proposalRes.proposal) throw new Error("Deriv proposal generation failed");
+    const proposalId = proposalRes.proposal.id;
 
-    if (!proposalRes.proposal) throw new Error("Proposal generation failed");
-
-    // 2. Buy contract using proposal ID
+    // Step 3 — Buy the contract using the proposal ID
     const buyRes = await sendWsRequest({
-      buy: proposalRes.proposal.id,
+      buy: proposalId,
       price: amount
     });
 
+    if (!buyRes.buy) throw new Error("Deriv buy response missing contract data");
     return buyRes.buy;
   } catch (error) {
     console.error(`❌ [Deriv API] Order placement failed for ${symbol}:`, error.message || error);

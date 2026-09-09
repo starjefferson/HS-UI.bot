@@ -1,148 +1,112 @@
+/**
+ * Next.js API Route: /api/broker
+ *
+ * Serves live data to the Dashboard UI.
+ * Architecture: Direct Deriv API — reads history.json for trade records,
+ * calls derivApi.js for live balance and order placement.
+ *
+ * GET  ?type=balance    → Live account balance from Deriv
+ * GET  ?type=open       → Last recorded trade from history.json
+ * GET  ?type=trades     → Total trade count from history.json
+ * GET  ?type=history    → Full trade history array
+ * POST action=execute   → Manually place an order via Deriv API
+ */
+
 import fs from "fs";
 import path from "path";
-import { runBot } from "@/botEngine/engine.js";
-import { getBalance, placeOrder } from "@/executionModule/brokerConnector.js";
+import { getAccountBalance, placeOrder } from "@/derivApi.js";
 
-// Persistent files
-const logPath = path.resolve("./closedTrades.json");       // trade history from your bot
-const signalPath = path.resolve("./latestSignal.json");    // last signal for EA polling
+// Persistent trade history written by the bot engine (index.js)
+const HISTORY_PATH = path.resolve("./history.json");
 
+// ---------------------------------------------------------------------------
 // Helpers
-function readJsonSafe(filePath, fallback) {
+// ---------------------------------------------------------------------------
+
+function readHistory() {
   try {
-    if (!fs.existsSync(filePath)) return fallback;
-    const raw = fs.readFileSync(filePath, "utf-8");
-    if (!raw) return fallback;
-    return JSON.parse(raw);
+    if (!fs.existsSync(HISTORY_PATH)) return [];
+    const raw = fs.readFileSync(HISTORY_PATH, "utf-8").trim();
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
   } catch (e) {
-    console.error("JSON read error:", e);
-    return fallback;
+    console.error("[/api/broker] Failed to read history.json:", e.message);
+    return [];
   }
 }
 
-function writeJsonSafe(filePath, data) {
-  try {
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
-    return true;
-  } catch (e) {
-    console.error("JSON write error:", e);
-    return false;    
-  }
-}
+// ---------------------------------------------------------------------------
+// GET Handler
+// ---------------------------------------------------------------------------
 
-// Format a trade object into EA-consumable signal
-function tradeToSignal(trade) {
-  if (!trade) return null;
-
-  const action = trade.action || (trade.direction ? trade.direction : null);
-  const symbol = trade.pair || trade.symbol || null;
-  const sl = trade.sl ?? null;
-  const tp = trade.tp ?? null;
-  const lot = trade.lot ?? 0.1;
-
-  if (!action || !symbol || sl === null || tp === null) return null;
-
-  return { action, symbol, sl, tp, lot };
-}
-
-// GET handler: multiplexed by ?type=balance|open|trades|execute
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
     const type = searchParams.get("type");
 
-    // 1) Live balance
+    // 1) Live balance from Deriv
     if (type === "balance") {
-      try {
-        const balance = await getBalance();
-        return Response.json({ balance });
-      } catch (err) {
-        console.error("Balance fetch failed:", err);
-        return Response.json({ balance: 0 });
-      }
+      const balance = await getAccountBalance();
+      return Response.json({ balance });
     }
 
-    // 2) Last open trade
+    // 2) Most recent trade entry (last item in history.json)
     if (type === "open") {
-      const trades = readJsonSafe(logPath, []);
+      const trades = readHistory();
       const lastTrade = trades.length ? trades[trades.length - 1] : null;
-      return Response.json(lastTrade || { pair: null });
+      return Response.json(lastTrade || { symbol: null });
     }
 
-    // 3) Total trades count
+    // 3) Total trade count
     if (type === "trades") {
-      const trades = readJsonSafe(logPath, []);
+      const trades = readHistory();
       return Response.json({ totalTrades: trades.length });
     }
 
-    // 4) EA polling endpoint
-    if (type === "execute") {
-      const persistedSignal = readJsonSafe(signalPath, null);
-      if (persistedSignal) return Response.json(persistedSignal);
-
-      const trades = readJsonSafe(logPath, []);
-      const lastTrade = trades.length ? trades[trades.length - 1] : null;
-      const signal = tradeToSignal(lastTrade);
-      return Response.json(signal || {});
+    // 4) Full trade history (for a history table / widget)
+    if (type === "history") {
+      const trades = readHistory();
+      return Response.json({ trades });
     }
 
-    return Response.json({ error: "Invalid type" }, { status: 400 });
+    return Response.json({ error: "Invalid type. Use: balance | open | trades | history" }, { status: 400 });
   } catch (err) {
     console.error("GET /api/broker error:", err);
     return Response.json({ error: "Server error" }, { status: 500 });
   }
 }
 
-// POST handler
+// ---------------------------------------------------------------------------
+// POST Handler
+// ---------------------------------------------------------------------------
+
 export async function POST(request) {
   try {
     const body = await request.json();
     const action = body?.action;
 
-    // 1) Run bot
-    if (action === "runBot") {
-      const candleData = body?.candleData ?? null;
-      const result = await runBot(candleData);
+    // Manual order execution via UI
+    if (action === "execute") {
+      const { symbol, amount, side, sl, tp } = body;
 
-      const trades = readJsonSafe(logPath, []);
-      const lastTrade = trades.length ? trades[trades.length - 1] : null;
-      const signal = tradeToSignal(lastTrade);
+      if (!symbol || !amount || !side || sl == null || tp == null) {
+        return Response.json(
+          { error: "Missing required fields: symbol, amount, side, sl, tp" },
+          { status: 400 }
+        );
+      }
 
-      if (signal) writeJsonSafe(signalPath, signal);
+      const result = await placeOrder({ symbol, amount, side, sl, tp });
 
-      return Response.json({
-        status: "Bot executed",
-        signal: signal || null,
-        result: result ?? null,
-      });
+      if (!result) {
+        return Response.json({ error: "Order placement failed. Check bot logs." }, { status: 500 });
+      }
+
+      return Response.json({ status: "Order executed", result });
     }
 
-    // 2) Manually set signal
-    if (action === "setSignal") {
-      const signal = tradeToSignal(body);
-      if (!signal) {
-        return Response.json({ error: "Invalid signal payload" }, { status: 400 });
-      }
-      writeJsonSafe(signalPath, signal);
-      return Response.json({ status: "Signal set", signal });
-    }
-
-    // 3) Execute order
-    if (action === "executeOrder") {
-      const signal = tradeToSignal(body);
-      if (!signal) {
-        return Response.json({ error: "Invalid order payload" }, { status: 400 });
-      }
-      try {
-        const execRes = await placeOrder(signal);
-        return Response.json({ status: "Order executed", execRes });
-      } catch (err) {
-        console.error("Order execution failed:", err);
-        return Response.json({ error: "Execution failed" }, { status: 500 });
-      }
-    }
-
-    return Response.json({ error: "Invalid action" }, { status: 400 });
+    return Response.json({ error: "Invalid action. Use: execute" }, { status: 400 });
   } catch (err) {
     console.error("POST /api/broker error:", err);
     return Response.json({ error: "Server error" }, { status: 500 });

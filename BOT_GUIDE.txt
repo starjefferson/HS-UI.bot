@@ -16,16 +16,15 @@
 
   1.  What This Bot Does (Plain English)
   2.  How the Bot Makes Trading Decisions
-  3.  The Two Parts of the Bot
+  3.  System Architecture
   4.  File-by-File Explanation
   5.  Setting Up on Your Computer (First Time)
-  6.  Setting Up MetaTrader 5 — Step by Step (Exact Clicks)
-  7.  Running the Bot Locally (Testing)
-  8.  Deploying to a VPS (24/7 Operation)
-  9.  Configuration Reference
-  10. Understanding the Log Messages
-  11. What to Do When Something Goes Wrong
-  12. How Trades Are Calculated
+  6.  Running the Bot Locally (Testing)
+  7.  Deploying to a VPS (24/7 Operation)
+  8.  Configuration Reference
+  9.  Understanding the Log Messages
+  10. What to Do When Something Goes Wrong
+  11. How Trades Are Calculated
 
 ================================================================================
   1. WHAT THIS BOT DOES (PLAIN ENGLISH)
@@ -52,13 +51,15 @@
   - Calculates the correct lot size automatically based on your account balance
     and 5% risk per trade
 
-  - Sends trade orders directly into MetaTrader 5 without you clicking anything
+  - Places trades directly via Deriv's WebSocket API — no MetaTrader 5, no
+    desktop trading terminal required
 
 ================================================================================
   2. HOW THE BOT MAKES TRADING DECISIONS
 ================================================================================
 
-  The bot follows this exact sequence for every pair, every 5 minutes:
+  The bot follows this exact sequence for every pair, once per hour
+  (approximately 5 seconds after each new hour candle opens):
 
   STEP 1 — TRADING HOURS CHECK
   ─────────────────────────────
@@ -144,10 +145,11 @@
   - RR below 2.5 = not profitable enough for the risk taken
   - RR above 3.0 = the SL is probably too tight and the pattern may be wrong
 
-  STEP 7 — SIGNAL QUEUING
+  STEP 7 — TRADE EXECUTION
   ─────────────────────────
-  If all checks pass, the signal is written to signals.json.
-  MetaTrader 5 picks it up on the next tick.
+  If all checks pass, the bot sends the trade order directly to Deriv via
+  the WebSocket API (wss://ws.derivws.com). No intermediate file or MT5
+  handshake is involved.
 
   STEP 8 — LOT SIZE CALCULATION
   ──────────────────────────────
@@ -161,39 +163,48 @@
   lot sizes shrink. Your account risk is always approximately 5% per trade.
 
 ================================================================================
-  3. THE TWO PARTS OF THE BOT
+  3. SYSTEM ARCHITECTURE
 ================================================================================
 
-  The bot has TWO separate programs that run at the same time:
+  The bot consists of TWO separate processes that run together:
 
   ┌─────────────────────────────────────────────────────────────────┐
-  │  PART 1: NODE.JS SERVER (server.js)                            │
-  │  Runs on: Your computer or VPS                                 │
-  │  Port: 3001 (internal, not public)                             │
-  │  Role: Brain — receives data, detects patterns, queues trades  │
+  │  PART 1: BOT ENGINE (index.js)                                 │
+  │  Runs on: Your computer or VPS (Node.js process)               │
+  │  Role: Brain — fetches candles from Deriv via WebSocket,        │
+  │         detects H&S patterns, calculates RR, executes trades   │
+  │         directly to your Deriv account                         │
+  │                                                                 │
+  │  Candle data is fetched ONCE PER HOUR, approximately 5 seconds │
+  │  after the new H1 candle opens, to ensure a fully closed       │
+  │  candle is used for entry confirmation. There is no reason to  │
+  │  poll more frequently — the strategy requires a minimum 1-hour │
+  │  candle close for pattern and neckline confirmation.           │
   └─────────────────────────────────────────────────────────────────┘
-                              ▲│
-                    candles   ││  trade signals
-                    every     ││  (buy/sell/lot/sl/tp)
-                    5 min     ││
-                              │▼
+                              │
+                              │ Live WebSocket
+                              │ wss://ws.derivws.com
+                              ▼
   ┌─────────────────────────────────────────────────────────────────┐
-  │  PART 2: MT5 EXPERT ADVISOR (MT5_TradeExecutor.mq5)           │
-  │  Runs on: MetaTrader 5 (on your Windows machine or VPS)        │
-  │  Role: Hands — fetches candle data and executes orders         │
+  │  DERIV PLATFORM (wss://ws.derivws.com)                         │
+  │  Provides: Live candle data (all timeframes)                   │
+  │  Receives: Contract / trade orders from the bot engine         │
+  │  No MetaTrader 5. No Expert Advisors. No desktop terminal.     │
   └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
   ┌─────────────────────────────────────────────────────────────────┐
-  │  PART 3: NEXT.JS DASHBOARD (app/)                              │
+  │  PART 2: NEXT.JS DASHBOARD (app/)                              │
   │  Runs on: Browser at http://localhost:3000                     │
   │  Port: 3000 (can be exposed publicly on VPS)                   │
-  │  Role: Eyes — shows balance, open trades, history              │
+  │  Role: Eyes — shows balance, open trades, trade history        │
   └─────────────────────────────────────────────────────────────────┘
 
-  IMPORTANT: Both Node.js and MetaTrader 5 must be running at the same time
-  on the SAME machine (or both on a VPS). The MT5 EA makes HTTP requests to
-  http://127.0.0.1:3001 — this only works when they share the same network.
+  IMPORTANT: No MetaTrader 5 installation is required. Everything
+  runs entirely in Node.js and communicates with Deriv directly
+  over WebSocket. Both processes (bot engine + dashboard) are
+  managed by PM2 on your Linux/Windows VPS.
+
 
 ================================================================================
   4. FILE-BY-FILE EXPLANATION
@@ -202,13 +213,16 @@
   PROJECT ROOT FILES:
   ────────────────────
 
-  server.js
-    The core Express.js web server. This is the brain of the bot.
-    It has 3 routes (web endpoints):
-    - POST /candles   → receives candle data from MT5, runs all detection logic
-    - GET  /execute   → MT5 polls this to receive a trade order
-    - GET  /balance   → dashboard reads this to show account balance
-    - GET  /status    → health check, shows bot state
+  index.js
+    The main bot engine. This is the brain of the entire system.
+    It connects to Deriv's WebSocket API (wss://ws.derivws.com) and runs
+    a continuous hourly loop:
+    - Once per hour (≈5 seconds after the new H1 candle opens): fetches
+      candle data for all 7 pairs across all 4 timeframes
+    - Runs top-down trend analysis (3-of-4 SMA filter)
+    - Runs H&S pattern detection and neckline breakout checks
+    - If a valid signal is found: places a contract directly on Deriv
+      via the same WebSocket connection
 
   config.js
     All the settings for the bot in one place:
@@ -217,33 +231,23 @@
     - maxTradesPerWeek: weekly safety limit
     - riskPercent: % of balance to risk per trade (set to 5%)
     - rrRatio: the minimum reward-to-risk ratio
-    Change numbers here to adjust bot behaviour — do NOT edit server.js for this.
+    Change numbers here to adjust bot behaviour — do NOT edit index.js for this.
 
-  MT5_TradeExecutor.mq5
-    The MetaTrader 5 Expert Advisor (trading script). Written in MQL5.
-    This file is compiled and run inside MetaTrader 5.
-    Every tick, it:
-    1. Every 5 minutes: collects candle data and POSTs to /candles
-    2. Every tick: calls GET /execute to check for pending orders
-    3. If an order exists: places the trade and draws visual lines on the chart
-
-  signals.json
-    Temporary queue file. When the server detects a valid signal, it writes it
-    here. When MT5 picks it up, the entry is removed. This file is automatically
-    cleared every time the server restarts to prevent stale signals.
+  .env.local
+    Your private credentials. Not committed to Git. Contains:
+    - DERIV_APP_ID: your Deriv application ID
+    - DERIV_API_TOKEN: your Deriv account API token (treat like a password)
 
   history.json
     Internal log of all signals that have been executed. Used to prevent the
     same pattern from being traded more than once (via patternID matching).
 
-  closedTrades.json
-    User-facing log of all executed trades. Read by:
-    - risk.js (to check weekly trade count)
-    - The dashboard (to show total trades, history)
-    Starts empty. Grows as trades are taken.
+  signals.json
+    Temporary queue file. When a valid signal is detected, it is written here
+    and immediately sent to Deriv. Cleared on every bot restart.
 
   pm2.ecosystem.config.cjs
-    PM2 process manager configuration. Used on VPS to keep both the server
+    PM2 process manager configuration. Used on VPS to keep both the bot engine
     and dashboard alive 24/7 with automatic crash recovery.
 
   SRC/ FOLDER (bot engine modules):
@@ -265,8 +269,9 @@
     - Validates that the TP is placed on the correct side of the neckline
 
   src/patternDetection/topDownAnalysis.js
-    Standalone top-down trend check used by the old engine.js (legacy, not
-    used in the active server.js pipeline — the trend check is built into server.js).
+    Standalone top-down trend check.
+    - Checks all 4 timeframes against the 20-period SMA
+    - Returns the dominant bias (buy/sell) and the score (e.g. 3/4)
 
   src/riskManagement/risk.js
     Weekly trade frequency control.
@@ -290,12 +295,13 @@
 
   app/api/broker/route.js
     Next.js API routes for the dashboard to read data:
-    - GET /api/broker?type=balance  → fetches balance from Node server
+    - GET /api/broker?type=balance  → fetches live balance from Deriv API
     - GET /api/broker?type=open     → reads last open trade from closedTrades.json
     - GET /api/broker?type=trades   → counts total trades in closedTrades.json
 
   src/components/Dashboard.js
     The visual interface showing three cards: Account Balance, Open Trade, Total Trades.
+
 
 ================================================================================
   5. SETTING UP ON YOUR COMPUTER (FIRST TIME)
@@ -303,9 +309,10 @@
 
   REQUIREMENTS:
   - Node.js v18 or newer. Download from: https://nodejs.org
-  - MetaTrader 5. Download from your broker's website.
-  - A Forex broker account with MT5 support (demo is fine for testing)
+  - A Deriv account (Real or Demo). Sign up at: https://deriv.com
+  - A Deriv API Token with Read, Trade, Payments, Admin scopes
   - A terminal (Command Prompt, PowerShell, or Windows Terminal)
+  - NO MetaTrader 5 required. NO Expert Advisors. NO broker MT5 account.
 
   STEP 1 — Open a terminal in the project folder
   ──────────────────────────────────────────────
@@ -322,7 +329,7 @@
 
     npm install
 
-  This downloads all the libraries the bot needs (Express, Next.js, etc.).
+  This downloads all the libraries the bot needs (ws, Next.js, etc.).
   It will take 1–2 minutes. You'll see a lot of text scrolling — that's normal.
   When it finishes, you'll see a line like "added 500 packages".
 
