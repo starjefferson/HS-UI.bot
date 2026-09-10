@@ -44,3 +44,5 @@ next-env.d.ts
 /logs
 .env.local
 .env
+.env.local
+.env
