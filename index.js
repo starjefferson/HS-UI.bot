@@ -1,10 +1,19 @@
 import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import dotenv from "dotenv";
-import { getCandles, getAccountBalance, placeOrder } from "./src/derivApi.js";
+import { getCandles, getAccountBalance, placeOrder } from "./src/metaApi.js";
 import { runDetection } from "./src/patternDetection/patternEngine.js";
 import { canTrade } from "./src/riskManagement/risk.js";
 
-dotenv.config({ path: ".env.local" });
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+if (fs.existsSync(path.join(__dirname, ".env.local"))) {
+  dotenv.config({ path: path.join(__dirname, ".env.local") });
+} else if (fs.existsSync(path.join(__dirname, ".env"))) {
+  dotenv.config({ path: path.join(__dirname, ".env") });
+} else {
+  dotenv.config();
+}
 
 const PAIRS = ["EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD"];
 const HISTORY_PATH = "./history.json";
@@ -31,11 +40,11 @@ const calculateSMA = (data, period) => {
 };
 
 /**
- * Central Scan Cycle for Deriv
+ * Central Scan Cycle for IC Markets via MetaApi
  */
 async function runTradingCycle() {
   console.log(`\n==================================================`);
-  console.log(`🔍 [${new Date().toISOString()}] Starting Deriv Market Scan...`);
+  console.log(`🔍 [${new Date().toISOString()}] Starting IC Markets (MetaApi) Market Scan...`);
   console.log(`==================================================`);
 
   const history = loadJSON(HISTORY_PATH);
@@ -43,14 +52,14 @@ async function runTradingCycle() {
 
   for (const symbol of PAIRS) {
     try {
-      // 1. Fetch historical candles for 1W, 1D, 4H, 1H from Deriv API
+      // 1. Fetch historical candles for 1W, 1D, 4H, 1H from MetaApi
       const w1 = await getCandles(symbol, "1W", 50);
       const d1 = await getCandles(symbol, "1D", 200);
       const h4 = await getCandles(symbol, "4H", 200);
       const h1 = await getCandles(symbol, "1H", 200);
 
       if (!w1 || !d1 || !h4 || !h1 || h1.length < 200) {
-        console.log(`⚠️ [${symbol}] Insufficient candle history returned from Deriv API.`);
+        console.log(`⚠️ [${symbol}] Insufficient candle history returned from MetaApi.`);
         continue;
       }
 
@@ -127,9 +136,9 @@ async function runTradingCycle() {
         continue;
       }
 
-      // 9. Order Execution via Deriv
+      // 9. Order Execution via MetaApi
       const stakeAmount = balance * (RISK_PERCENT / 100);
-      console.log(`🎯 [${symbol}] TARGET RR ACHIEVED (${rr.toFixed(2)}). Placing Deriv Order ($${stakeAmount.toFixed(2)} Stake)...`);
+      console.log(`🎯 [${symbol}] TARGET RR ACHIEVED (${rr.toFixed(2)}). Placing IC Markets Order ($${stakeAmount.toFixed(2)} Risk Stake)...`);
 
       const orderResult = await placeOrder({
         symbol,
@@ -140,7 +149,7 @@ async function runTradingCycle() {
       });
 
       if (orderResult) {
-        console.log(`🚀 [Deriv] Order Executed Successfully for ${symbol}! Contract ID: ${orderResult.contract_id || "Filled"}`);
+        console.log(`🚀 [MetaApi] Order Executed Successfully for ${symbol}! Order ID: ${orderResult.contract_id}`);
 
         // Record in history.json
         history.push({
@@ -151,13 +160,14 @@ async function runTradingCycle() {
           sl: pattern.sl,
           tp: pattern.tp,
           stake: stakeAmount,
+          volume: orderResult.volume,
           rr: rr.toFixed(2),
           executionTime: new Date().toISOString()
         });
         saveJSON(HISTORY_PATH, history);
       }
     } catch (err) {
-      console.error(` Critical Error processing ${symbol}:`, err.message);
+      console.error(`❌ Critical Error processing ${symbol}:`, err.message);
     }
   }
 }
@@ -183,7 +193,7 @@ function scheduleNextHourlyScan() {
 }
 
 // Startup Engine
-console.log("🚀 Starting Standalone Deriv Head & Shoulders Trading Engine (Smart Hourly Mode)...");
+console.log("🚀 Starting Standalone MetaApi Head & Shoulders Trading Engine (Smart Hourly Mode)...");
 runTradingCycle().then(() => {
   scheduleNextHourlyScan();
 });

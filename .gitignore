@@ -42,3 +42,5 @@ next-env.d.ts
 
 # PM2 logs
 /logs
+.env.local
+.env

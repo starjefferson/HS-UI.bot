@@ -14,7 +14,7 @@
 
 import fs from "fs";
 import path from "path";
-import { getAccountBalance, placeOrder } from "@/derivApi.js";
+import { getAccountBalance, placeOrder } from "@/metaApi.js";
 
 // Persistent trade history written by the bot engine (index.js)
 const HISTORY_PATH = path.resolve("./history.json");

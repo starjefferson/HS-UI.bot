@@ -9,4 +9,4 @@
  * The bot now executes trades directly via the Deriv WebSocket API.
  */
 
-export { getAccountBalance as getBalance, placeOrder } from "../derivApi.js";
+export { getAccountBalance as getBalance, placeOrder } from "../metaApi.js";

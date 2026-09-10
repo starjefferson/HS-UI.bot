@@ -26,17 +26,33 @@ Architecture:
 Step 1: Create an Account
   - Go to https://deriv.com and create a Real or Demo account.
 
-Step 2: Generate Your API Token
-  - Log in to your Deriv account.
+Step 2: Generate Your API Token (DO NOT use developers.deriv.com PAT!)
+  - Log in to your Deriv trading account at https://app.deriv.com
   - Go to: Account Settings → Security & Limits → API Token
     (Direct link: https://app.deriv.com/account/api-token)
-  - Create a token with these scopes: Read, Trade, Payments, Admin
-  - Copy the generated token. (Keep this token secure! Treat it like a password.)
+  - Choose a name (e.g. "HSBot")
+  - Tick ALL required scopes:
+      [x] Read
+      [x] Trade
+      [x] Payments
+      [x] Trading information
+      [x] Admin
+  - Click "Create" and copy the token.
+  - IMPORTANT: The token must look like a standard ~15 character code (e.g. "a1b2c3d4e5f6").
+    Do NOT use a token starting with "pat_" from developers.deriv.com. Deriv's
+    WebSocket API will reject "pat_" tokens with "InvalidToken".
 
-Step 3: Get Your App ID
-  - The default App ID is 1089 (Deriv's public demo app ID).
-  - For production, register your own App ID at: https://api.deriv.com/app-registration
-  - Using your own App ID is recommended to avoid shared rate limits.
+Step 3: App ID Configuration
+  - Set DERIV_APP_ID=1089 in your .env.local file.
+  - 1089 is Deriv's official public WebSocket App ID and works for both Demo and Real accounts.
+  - Deriv WebSocket API requires a NUMERIC App ID. Do NOT use alphanumeric IDs from
+    developers.deriv.com app registration.
+
+Step 4: Test Your Connection
+  - Run the diagnostic tool:
+      npm run test:deriv
+  - If everything is configured correctly, it will verify authorization, print your
+    account balance, and test the EURUSD market candle feed.
 
 
 3. LOCAL ENVIRONMENT CONFIGURATION

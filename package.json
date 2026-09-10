@@ -11,7 +11,8 @@
     "start": "next start",
     "start:prod": "pm2 start pm2.ecosystem.config.cjs",
     "logs": "pm2 logs",
-    "monitor": "pm2 monit"
+    "monitor": "pm2 monit",
+    "test:deriv": "node test-deriv.js"
   },
   "dependencies": {
     "axios": "^1.8.2",
@@ -21,6 +22,7 @@
     "express": "^5.2.1",
     "framer-motion": "^12.23.26",
     "lucide-react": "^0.562.0",
+    "metaapi.cloud-sdk": "^29.3.3",
     "next": "^16.1.1",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
