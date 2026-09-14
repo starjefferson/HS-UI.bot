@@ -4,7 +4,6 @@ import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import { getCandles, getAccountBalance, placeOrder } from "./src/metaApi.js";
 import { runDetection } from "./src/patternDetection/patternEngine.js";
-import { canTrade } from "./src/riskManagement/risk.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 if (fs.existsSync(path.join(__dirname, ".env.local"))) {
@@ -130,9 +129,13 @@ async function runTradingCycle() {
         continue;
       }
 
-      // 8. Trade Frequency & Cooldown Guard
-      if (!canTrade()) {
-        console.log(`🚫 [${symbol}] Risk Manager: Weekly trade limit or cooldown active. Skipping.`);
+      // 8. Trade Frequency Guard (Max 10 trades per rolling week, no cooldown)
+      const nowMs = Date.now();
+      const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
+      const tradesThisWeek = history.filter(h => (nowMs - new Date(h.executionTime).getTime()) < oneWeekMs);
+      
+      if (tradesThisWeek.length >= 10) {
+        console.log(`🚫 [${symbol}] Risk Manager: Weekly trade limit (10 trades/week) reached (${tradesThisWeek.length}/10). Skipping.`);
         continue;
       }
 

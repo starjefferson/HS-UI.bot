@@ -21,33 +21,65 @@ const require = createRequire(import.meta.url);
 const MetaApi = require("metaapi.cloud-sdk").default || require("metaapi.cloud-sdk");
 
 let apiInstance = null;
+let accountInstance = null;
 let connectionInstance = null;
+let isInitialized = false;
 
 /**
- * Singleton helper to initialize and synchronize an RPC connection to MetaApi Cloud.
+ * Singleton helper to initialize, deploy, and connect to MetaApi Cloud once.
  */
-async function getConnection() {
-  if (connectionInstance) return connectionInstance;
+async function initializeMetaApi() {
+  if (isInitialized && accountInstance && connectionInstance) {
+    return { account: accountInstance, connection: connectionInstance };
+  }
 
   const token = process.env.METAAPI_TOKEN?.trim();
   const accountId = process.env.METAAPI_ACCOUNT_ID?.trim();
 
   if (!token || !accountId) {
+    console.error("❌ [MetaApi Error] Missing environment variables.");
+    console.error(`- METAAPI_TOKEN present: ${!!token}`);
+    console.error(`- METAAPI_ACCOUNT_ID present: ${!!accountId}`);
     throw new Error("Missing METAAPI_TOKEN or METAAPI_ACCOUNT_ID in environment variables.");
   }
 
   if (!apiInstance) {
+    console.log("🔌 [MetaApi] Initializing MetaApi Cloud SDK...");
     apiInstance = new MetaApi(token);
   }
 
-  const account = await apiInstance.metatraderAccountApi.getAccount(accountId);
-  await account.waitConnected();
+  if (!accountInstance) {
+    console.log(`🔌 [MetaApi] Retrieving account (${accountId})...`);
+    accountInstance = await apiInstance.metatraderAccountApi.getAccount(accountId);
+  }
 
-  connectionInstance = account.getRPCConnection();
-  await connectionInstance.connect();
-  await connectionInstance.waitSynchronized();
+  if (accountInstance.state !== "DEPLOYED") {
+    console.log(`🚀 [MetaApi] Account state is "${accountInstance.state}". Deploying account now...`);
+    await accountInstance.deploy();
+  }
 
-  return connectionInstance;
+  console.log("🔌 [MetaApi] Waiting for account connection to broker...");
+  await accountInstance.waitConnected();
+
+  if (!connectionInstance) {
+    console.log("🔌 [MetaApi] Establishing RPC Connection...");
+    connectionInstance = accountInstance.getRPCConnection();
+    await connectionInstance.connect();
+    console.log("🔌 [MetaApi] Synchronizing terminal state with IC Markets...");
+    await connectionInstance.waitSynchronized();
+    console.log("✅ [MetaApi] Connection fully synchronized and ready!");
+  }
+
+  isInitialized = true;
+  return { account: accountInstance, connection: connectionInstance };
+}
+
+/**
+ * Helper to get the active RPC connection instance.
+ */
+async function getConnection() {
+  const { connection } = await initializeMetaApi();
+  return connection;
 }
 
 /**
@@ -66,17 +98,21 @@ export function getMetaApiTimeframe(tf) {
 }
 
 /**
- * Fetch historical candles from MetaApi RPC.
+ * Fetch historical candles from MetaApi Account API.
  * Candles are reversed so index 0 is always the most recent candle.
  */
 export async function getCandles(symbol, timeframe, count = 200) {
   try {
-    const conn = await getConnection();
+    const { account } = await initializeMetaApi();
     const metaTf = getMetaApiTimeframe(timeframe);
 
-    const candles = await conn.getHistoricalCandles(symbol, metaTf, undefined, count);
+    console.log(`📥 [MetaApi] Fetching ${count} candles for ${symbol} (${metaTf})...`);
+    const candles = await account.getHistoricalCandles(symbol, metaTf, undefined, count);
 
-    if (!candles || candles.length === 0) return null;
+    if (!candles || candles.length === 0) {
+      console.warn(`⚠️ [MetaApi] No candle data returned for ${symbol}`);
+      return null;
+    }
 
     // MetaApi returns candles chronologically (oldest at index 0).
     // Reversing ensures index 0 = most recent candle (preserving engine behavior).
@@ -103,7 +139,9 @@ export async function getAccountBalance() {
   try {
     const conn = await getConnection();
     const info = await conn.getAccountInformation();
-    return parseFloat(info.equity || info.balance || 1000);
+    const balance = parseFloat(info.equity || info.balance || 1000);
+    console.log(`💰 [MetaApi] Connected Account Balance/Equity: $${balance.toFixed(2)}`);
+    return balance;
   } catch (error) {
     console.error("❌ [MetaApi] Balance fetch error:", error.message || error);
     return 1000;
