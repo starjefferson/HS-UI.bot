@@ -1,1 +1,38 @@
-[]
+[
+  {
+    "patternID": "EURUSD_sell_1789542000000",
+    "symbol": "EURUSD",
+    "type": "sell",
+    "entryPrice": 1.14662,
+    "sl": 1.1551799999999999,
+    "tp": 1.1225000000000007,
+    "stake": 500,
+    "volume": 0.58,
+    "rr": "2.82",
+    "executionTime": "2026-09-16T23:00:30.837Z"
+  },
+  {
+    "patternID": "USDCAD_buy_1789653600000",
+    "symbol": "USDCAD",
+    "type": "buy",
+    "entryPrice": 1.4003,
+    "sl": 1.3971200000000001,
+    "tp": 1.4093199999999992,
+    "stake": 495.24250000000006,
+    "volume": 1.55,
+    "rr": "2.84",
+    "executionTime": "2026-09-18T09:02:09.039Z"
+  },
+  {
+    "patternID": "USDJPY_buy_1790071200000",
+    "symbol": "USDJPY",
+    "type": "buy",
+    "entryPrice": 158.422,
+    "sl": 157.749,
+    "tp": 160.345,
+    "stake": 582.9064999999999,
+    "volume": 1.37,
+    "rr": "2.86",
+    "executionTime": "2026-09-24T07:01:37.654Z"
+  }
+]

@@ -75,11 +75,30 @@ async function initializeMetaApi() {
 }
 
 /**
- * Helper to get the active RPC connection instance.
+ * Ensures account and RPC connection remain connected and synchronized.
+ * Re-schedules synchronization if MetaApi WebSocket stream drops.
  */
-async function getConnection() {
-  const { connection } = await initializeMetaApi();
-  return connection;
+async function ensureSynced() {
+  const { account, connection } = await initializeMetaApi();
+
+  try {
+    if (account.state !== "DEPLOYED") {
+      await account.deploy();
+    }
+    await account.waitConnected();
+
+    if (!connection.isSynchronized) {
+      console.log("🔄 [MetaApi] RPC connection desynchronized. Resynchronizing with broker...");
+      await connection.waitSynchronized();
+    }
+  } catch (err) {
+    console.warn(`⚠️ [MetaApi] Synchronization check failed: ${err.message}. Forcing reconnect...`);
+    isInitialized = false;
+    connectionInstance = null;
+    return await initializeMetaApi();
+  }
+
+  return { account, connection };
 }
 
 /**
@@ -98,38 +117,43 @@ export function getMetaApiTimeframe(tf) {
 }
 
 /**
- * Fetch historical candles from MetaApi Account API.
+ * Fetch historical candles from MetaApi Account API with connection retry guards.
  * Candles are reversed so index 0 is always the most recent candle.
  */
-export async function getCandles(symbol, timeframe, count = 200) {
-  try {
-    const { account } = await initializeMetaApi();
-    const metaTf = getMetaApiTimeframe(timeframe);
+export async function getCandles(symbol, timeframe, count = 200, retries = 3) {
+  const metaTf = getMetaApiTimeframe(timeframe);
 
-    console.log(`📥 [MetaApi] Fetching ${count} candles for ${symbol} (${metaTf})...`);
-    const candles = await account.getHistoricalCandles(symbol, metaTf, undefined, count);
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const { account } = await ensureSynced();
 
-    if (!candles || candles.length === 0) {
-      console.warn(`⚠️ [MetaApi] No candle data returned for ${symbol}`);
-      return null;
+      console.log(`📥 [MetaApi] Fetching ${count} candles for ${symbol} (${metaTf})${attempt > 1 ? ` (Retry ${attempt}/${retries})` : ""}...`);
+      const candles = await account.getHistoricalCandles(symbol, metaTf, undefined, count);
+
+      if (!candles || candles.length === 0) {
+        console.warn(`⚠️ [MetaApi] No candle data returned for ${symbol}`);
+        return null;
+      }
+
+      return candles
+        .slice()
+        .reverse()
+        .map((c) => ({
+          time: new Date(c.time).getTime(),
+          open: parseFloat(c.open),
+          high: parseFloat(c.high),
+          low: parseFloat(c.low),
+          close: parseFloat(c.close)
+        }));
+    } catch (error) {
+      console.error(`❌ [MetaApi] Error fetching candles for ${symbol} (${timeframe}) [Attempt ${attempt}/${retries}]:`, error.message || error);
+      if (attempt === retries) return null;
+      isInitialized = false;
+      connectionInstance = null;
+      await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
     }
-
-    // MetaApi returns candles chronologically (oldest at index 0).
-    // Reversing ensures index 0 = most recent candle (preserving engine behavior).
-    return candles
-      .slice()
-      .reverse()
-      .map((c) => ({
-        time: new Date(c.time).getTime(),
-        open: parseFloat(c.open),
-        high: parseFloat(c.high),
-        low: parseFloat(c.low),
-        close: parseFloat(c.close)
-      }));
-  } catch (error) {
-    console.error(`❌ [MetaApi] Error fetching candles for ${symbol} (${timeframe}):`, error.message || error);
-    return null;
   }
+  return null;
 }
 
 /**
@@ -137,8 +161,8 @@ export async function getCandles(symbol, timeframe, count = 200) {
  */
 export async function getAccountBalance() {
   try {
-    const conn = await getConnection();
-    const info = await conn.getAccountInformation();
+    const { connection } = await ensureSynced();
+    const info = await connection.getAccountInformation();
     const balance = parseFloat(info.equity || info.balance || 1000);
     console.log(`💰 [MetaApi] Connected Account Balance/Equity: $${balance.toFixed(2)}`);
     return balance;
@@ -153,8 +177,8 @@ export async function getAccountBalance() {
  */
 export async function placeOrder({ symbol, amount, side, sl, tp }) {
   try {
-    const conn = await getConnection();
-    const priceInfo = await conn.getSymbolPrice(symbol);
+    const { connection } = await ensureSynced();
+    const priceInfo = await connection.getSymbolPrice(symbol);
 
     if (!priceInfo || !priceInfo.ask || !priceInfo.bid) {
       throw new Error(`Could not retrieve live market quote for ${symbol}`);
@@ -183,9 +207,9 @@ export async function placeOrder({ symbol, amount, side, sl, tp }) {
     const options = { comment: "normal-bot order" };
 
     if (isBuy) {
-      result = await conn.createMarketBuyOrder(symbol, volume, sl, tp, options);
+      result = await connection.createMarketBuyOrder(symbol, volume, sl, tp, options);
     } else {
-      result = await conn.createMarketSellOrder(symbol, volume, sl, tp, options);
+      result = await connection.createMarketSellOrder(symbol, volume, sl, tp, options);
     }
 
     return {
