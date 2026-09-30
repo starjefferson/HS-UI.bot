@@ -2,8 +2,12 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
-import { getCandles, getAccountBalance, placeOrder } from "./src/metaApi.js";
+import { getCandles, getAccountBalance, placeOrder, getOpenPositions, getSymbolPrice } from "./src/metaApi.js";
 import { runDetection } from "./src/patternDetection/patternEngine.js";
+import * as goldGuard from "./src/risk/goldGuard.js";
+import { canExecuteCorrelatedTrade } from "./src/risk/correlationGuard.js";
+import { logTradeOpen } from "./src/utils/historyLogger.js";
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 if (fs.existsSync(path.join(__dirname, ".env.local"))) {
@@ -14,7 +18,15 @@ if (fs.existsSync(path.join(__dirname, ".env.local"))) {
   dotenv.config();
 }
 
-const PAIRS = ["EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD"];
+const PAIRS = [
+  // Forex Majors (7) — deep liquidity, clean H&S structure
+  "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
+  // Precious Metals (1)
+  "XAUUSD",
+  // Best FX Crosses (4) — high liquidity, reliable MetaApi data
+  "EURGBP", "EURJPY", "GBPJPY", "AUDJPY",
+];
+
 const HISTORY_PATH = "./history.json";
 const RISK_PERCENT = parseFloat(process.env.RISK_PERCENT || "2.0");
 const MIN_RR = parseFloat(process.env.MIN_RR || "2.5");
@@ -48,6 +60,10 @@ async function runTradingCycle() {
 
   const history = loadJSON(HISTORY_PATH);
   const balance = await getAccountBalance();
+
+  // Fetch live open positions once per cycle for the correlation guard.
+  // Degrades gracefully to [] on error — guard will pass all trades through.
+  const openPositions = await getOpenPositions();
 
   for (const symbol of PAIRS) {
     try {
@@ -139,6 +155,45 @@ async function runTradingCycle() {
         continue;
       }
 
+      // ── Pre-Trade Validation Pipeline ──────────────────────────────────────
+
+      // 8.5a. Currency Correlation Guard
+      // Blocks entry if either the base or quote currency already has 2 open
+      // trades, preventing dangerous cluster exposure to a single currency.
+      const correlationCheck = canExecuteCorrelatedTrade(symbol, openPositions);
+      if (!correlationCheck.isAllowed) {
+        console.log(`[CORRELATION GUARD] ${symbol} blocked: ${correlationCheck.reason}`);
+        continue;
+      }
+
+      // 8.5b. Gold-Specific Guards (only applied when symbol is XAUUSD / GOLD)
+      if (goldGuard.isGoldSymbol(symbol)) {
+        // Live spread check using MetaApi tick price
+        try {
+          const priceInfo = await getSymbolPrice(symbol);
+          if (priceInfo?.bid && priceInfo?.ask) {
+            const spreadCheck = goldGuard.validateGoldSpread(priceInfo.bid, priceInfo.ask);
+            if (!spreadCheck.allowed) {
+              console.log(`[GOLD GUARD] ${symbol} blocked: Spread too wide ($${spreadCheck.spread}).`);
+              continue;
+            }
+          }
+        } catch (_) {
+          // Non-fatal — if price fetch fails, skip spread check for this cycle
+          console.warn(`[GOLD GUARD] ${symbol}: Spread check skipped (price fetch error).`);
+        }
+
+        // Gold Distribution Guard: rejects if price moved > $3.00 past neckline
+        const necklineRef = pattern.type === "sell" ? pattern.necklineLow : pattern.necklineHigh;
+        if (goldGuard.isGoldDistributed(currentPrice, necklineRef)) {
+          console.log(`[GOLD GUARD] ${symbol} blocked: Price distributed > $3.00 past neckline.`);
+          continue;
+        }
+      }
+
+
+      // ── End Pre-Trade Validation Pipeline ──────────────────────────────────
+
       // 9. Order Execution via MetaApi
       const stakeAmount = balance * (RISK_PERCENT / 100);
       console.log(`🎯 [${symbol}] TARGET RR ACHIEVED (${rr.toFixed(2)}). Placing IC Markets Order ($${stakeAmount.toFixed(2)} Risk Stake)...`);
@@ -154,21 +209,25 @@ async function runTradingCycle() {
       if (orderResult) {
         console.log(`🚀 [MetaApi] Order Executed Successfully for ${symbol}! Order ID: ${orderResult.contract_id}`);
 
-        // Record in history.json
-        history.push({
+        // Record in history.json via async historyLogger (non-blocking)
+        logTradeOpen({
           patternID,
+          ticketId:      String(orderResult.contract_id),
           symbol,
-          type: pattern.type,
-          entryPrice: currentPrice,
-          sl: pattern.sl,
-          tp: pattern.tp,
-          stake: stakeAmount,
-          volume: orderResult.volume,
-          rr: rr.toFixed(2),
-          executionTime: new Date().toISOString()
+          type:          pattern.type,
+          entryPrice:    orderResult.entryPrice ?? currentPrice,
+          sl:            pattern.sl,
+          tp:            pattern.tp,
+          volume:        orderResult.volume,
+          rr:            rr.toFixed(2),
+          executionTime: new Date().toISOString(),
         });
-        saveJSON(HISTORY_PATH, history);
+
+        // Keep the synchronous in-memory history array up to date so the
+        // fingerprinting guard (step 4) works correctly within the same cycle.
+        history.push({ patternID, executionTime: new Date().toISOString() });
       }
+
     } catch (err) {
       console.error(`❌ Critical Error processing ${symbol}:`, err.message);
     }

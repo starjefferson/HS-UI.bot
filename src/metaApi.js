@@ -149,6 +149,25 @@ export async function getAccountBalance() {
 }
 
 /**
+ * Fetch the current live bid/ask price for a symbol via MetaApi RPC.
+ * Used by goldGuard spread validation in index.js.
+ *
+ * @param {string} symbol - Trading symbol (e.g. "XAUUSD")
+ * @returns {Promise<{bid: number, ask: number}|null>}
+ */
+export async function getSymbolPrice(symbol) {
+  try {
+    const conn = await getConnection();
+    const priceInfo = await conn.getSymbolPrice(symbol);
+    if (!priceInfo || !priceInfo.bid || !priceInfo.ask) return null;
+    return { bid: parseFloat(priceInfo.bid), ask: parseFloat(priceInfo.ask) };
+  } catch (error) {
+    console.error(`❌ [MetaApi] getSymbolPrice error for ${symbol}:`, error.message || error);
+    return null;
+  }
+}
+
+/**
  * Execute a market order on IC Markets MT5 via MetaApi RPC.
  */
 export async function placeOrder({ symbol, amount, side, sl, tp }) {
@@ -196,5 +215,24 @@ export async function placeOrder({ symbol, amount, side, sl, tp }) {
   } catch (error) {
     console.error(`❌ [MetaApi] Order placement failed for ${symbol}:`, error.message || error);
     return null;
+  }
+}
+
+/**
+ * Fetch the list of currently open positions from the MT5 account via MetaApi RPC.
+ * Used by the correlationGuard to evaluate live currency cluster exposure.
+ *
+ * @returns {Promise<Object[]>} - Array of open position objects from MetaApi.
+ *                               Each object includes at minimum: { symbol, type, volume }
+ *                               Returns [] on error (non-fatal; guard degrades gracefully).
+ */
+export async function getOpenPositions() {
+  try {
+    const conn = await getConnection();
+    const positions = await conn.getPositions();
+    return Array.isArray(positions) ? positions : [];
+  } catch (error) {
+    console.error("❌ [MetaApi] getOpenPositions error:", error.message || error);
+    return [];
   }
 }
