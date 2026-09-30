@@ -1,17 +1,21 @@
 export const config = {
+  // Monitored Assets
   pairs: [
-    // Forex Majors (7) — deep liquidity, clean H&S structure
+    // Forex Majors (7)
     "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
-    // Precious Metals (1)
+    // Precious Metals (1) - Remove if Gold is completely disabled
     "XAUUSD",
-    // Best FX Crosses (4) — high liquidity, reliable MetaApi data
+    // Best FX Crosses (4)
     "EURGBP", "EURJPY", "GBPJPY", "AUDJPY",
   ],
+
+  // Analysis timeframes for top-down trend bias & pattern scanning
   topDownTFs: ["1W", "1D", "4H", "1H"],
-  maxTradesPerWeek: 2,
-  minDaysBetweenTrades: 2,
-  tradingHours: { start: 8, end: 21 }, // GMT+1
-  rrRatio: 3,
-  riskPercent: 5,   // 5% risk per trade
-  maxTradeHoldDays: 7
+
+  // 24-Hour continuous scanning (controlled by real-time spread guards)
+  tradingHours: { start: 0, end: 24 },
+
+  // Risk & Reward Targets
+  rrRatio: 2.5,       // Target Risk-to-Reward ratio (2.5 or 3)
+  riskPercent: 5.0,   // Risk percentage per trade
 };
