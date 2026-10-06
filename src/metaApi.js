@@ -181,8 +181,8 @@ export async function getAccountBalance() {
  */
 export async function getSymbolPrice(symbol) {
   try {
-    const conn = await getConnection();
-    const priceInfo = await conn.getSymbolPrice(symbol);
+    const { connection } = await ensureSynced();
+    const priceInfo = await connection.getSymbolPrice(symbol);
     if (!priceInfo || !priceInfo.bid || !priceInfo.ask) return null;
     return { bid: parseFloat(priceInfo.bid), ask: parseFloat(priceInfo.ask) };
   } catch (error) {
@@ -241,25 +241,20 @@ export async function placeOrder({ symbol, amount, side, sl, tp }) {
     return null;
   }
 }
-<<<<<<< HEAD
 
 /**
  * Fetch the list of currently open positions from the MT5 account via MetaApi RPC.
  * Used by the correlationGuard to evaluate live currency cluster exposure.
  *
  * @returns {Promise<Object[]>} - Array of open position objects from MetaApi.
- *                               Each object includes at minimum: { symbol, type, volume }
- *                               Returns [] on error (non-fatal; guard degrades gracefully).
  */
 export async function getOpenPositions() {
   try {
-    const conn = await getConnection();
-    const positions = await conn.getPositions();
+    const { connection } = await ensureSynced();
+    const positions = await connection.getPositions();
     return Array.isArray(positions) ? positions : [];
   } catch (error) {
     console.error("❌ [MetaApi] getOpenPositions error:", error.message || error);
     return [];
   }
 }
-=======
->>>>>>> b97f4c11e191c0a9b012c3f0168a5d7e56566a0d
