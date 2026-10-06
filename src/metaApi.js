@@ -74,9 +74,16 @@ async function initializeMetaApi() {
   return { account: accountInstance, connection: connectionInstance };
 }
 
+// Tracks the last time waitSynchronized() was called to prevent calling
+// it on every single candle fetch (44+ times per scan cycle).
+let lastSyncedAt = 0;
+const SYNC_COOLDOWN_MS = 60_000; // Only resync once per 60 seconds
+
 /**
  * Ensures account and RPC connection remain connected and synchronized.
- * Re-schedules synchronization if MetaApi WebSocket stream drops.
+ * Uses a 60-second cooldown on waitSynchronized() to prevent flooding the
+ * log with "desynchronized" messages on every candle fetch. The MetaApi SDK
+ * handles WebSocket failover and reconnection internally between our checks.
  */
 async function ensureSynced() {
   const { account, connection } = await initializeMetaApi();
@@ -87,14 +94,25 @@ async function ensureSynced() {
     }
     await account.waitConnected();
 
-    if (!connection.isSynchronized) {
+    // isSynchronized can be a boolean property or a getter depending on
+    // connection type — guard against non-boolean falsy values (undefined/null).
+    const synced = typeof connection.isSynchronized === "function"
+      ? connection.isSynchronized()
+      : connection.isSynchronized;
+
+    const now = Date.now();
+    const cooldownExpired = (now - lastSyncedAt) > SYNC_COOLDOWN_MS;
+
+    if (synced === false && cooldownExpired) {
       console.log("🔄 [MetaApi] RPC connection desynchronized. Resynchronizing with broker...");
       await connection.waitSynchronized();
+      lastSyncedAt = Date.now();
     }
   } catch (err) {
     console.warn(`⚠️ [MetaApi] Synchronization check failed: ${err.message}. Forcing reconnect...`);
     isInitialized = false;
     connectionInstance = null;
+    lastSyncedAt = 0;
     return await initializeMetaApi();
   }
 
