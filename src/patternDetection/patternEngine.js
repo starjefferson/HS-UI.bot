@@ -20,7 +20,7 @@ import { detectPatterns } from "./headShoulders.js";
  *    "1H": [...],   // Hourly candles — breakout trigger only
  *  }
  */
-export function runDetection(candleData, symbol) {
+export function runDetection(candleData, symbol, expectedBias) {
     // ── 1. Structural detection on 4H and 1D only ────────────────────────────
     const structuralTFs = ["4H", "1D"];
     let detectedSetups  = {};
@@ -33,6 +33,7 @@ export function runDetection(candleData, symbol) {
                 candleData["1W"] || [], // HTF 1W candles for zone generation
                 symbol
             );
+            if (result?.rejected) return null;
             if (result) {
                 detectedSetups[tf] = result;
             }
@@ -57,6 +58,26 @@ export function runDetection(candleData, symbol) {
     // Use 4H when available (more precise SL/TP), fall back to 1D
     const structuralSetup = detectedSetups["4H"] || detectedSetups["1D"];
 
+    if (expectedBias && structuralSetup.type !== expectedBias) {
+        console.log(
+            `⚠️ [${symbol}] Pattern rejected: ${structuralSetup.type.toUpperCase()} setup ` +
+            `conflicts with Bias (${expectedBias.toUpperCase()}).`
+        );
+        return null;
+    }
+
+    // ── Structural Integrity Guard ──────────────────────────────────────────
+    // Validate the target before checking whether the 1H breakout has occurred.
+    const isSell = structuralSetup.type === "sell";
+    if (isSell && structuralSetup.tp >= structuralSetup.necklineLow) {
+        console.log(`❌ [${symbol}] Logic Error: Sell TP is above Neckline. Pattern rejected.`);
+        return null;
+    }
+    if (!isSell && structuralSetup.tp <= structuralSetup.necklineHigh) {
+        console.log(`❌ [${symbol}] Logic Error: Buy TP is below Neckline. Pattern rejected.`);
+        return null;
+    }
+
     // ── 4. 1H Breakout Trigger — closed 1H candle must breach the neckline ───
     const h1Candles = candleData["1H"];
     if (!h1Candles || h1Candles.length < 2) {
@@ -74,18 +95,6 @@ export function runDetection(candleData, symbol) {
             `${structuralSetup.type === "sell" ? "necklineLow" : "necklineHigh"} ` +
             `(${structuralSetup.type === "sell" ? structuralSetup.necklineLow : structuralSetup.necklineHigh}).`
         );
-        return null;
-    }
-
-    // ── 5. Structural Integrity Guard ─────────────────────────────────────────
-    // Ensures TP is placed in the direction of the trade (catches malformed patterns).
-    const isSell = structuralSetup.type === "sell";
-    if (isSell && structuralSetup.tp >= structuralSetup.necklineLow) {
-        console.log(`❌ [${symbol}] Logic Error: Sell TP is above Neckline. Pattern rejected.`);
-        return null;
-    }
-    if (!isSell && structuralSetup.tp <= structuralSetup.necklineHigh) {
-        console.log(`❌ [${symbol}] Logic Error: Buy TP is below Neckline. Pattern rejected.`);
         return null;
     }
 

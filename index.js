@@ -99,13 +99,8 @@ async function runTradingCycle() {
       if (bias === "none") continue;
 
       // 3. Pattern Detection Engine
-      const pattern = runDetection(candleData, symbol);
+      const pattern = runDetection(candleData, symbol, bias);
       if (!pattern) continue;
-
-      if (pattern.type !== bias) {
-        console.log(`⚠️ [${symbol}] Pattern detected (${pattern.type.toUpperCase()}) but conflicts with Bias (${bias.toUpperCase()})`);
-        continue;
-      }
 
       // 4. Pattern Fingerprinting Guard (One & Done)
       const patternID = `${symbol}_${pattern.type}_${pattern.headTime}`;

@@ -220,7 +220,7 @@ function findHS(candles, type, symbol, htfResistances, htfSupports) {
         // ── Rule 1: HTF Catalyst Confluence — Head at HTF Resistance ─────────
         if (!isHeadAtHTFZone(head.val, htfResistances, "sell")) {
             console.log(`❌ [${symbol}] REJECTED: Head did not form at HTF Resistance.`);
-            return null;
+            return { rejected: true };
         }
 
         // ── Rule 2: Path Clearance — No HTF Support blocking the sell path ───
@@ -233,7 +233,7 @@ function findHS(candles, type, symbol, htfResistances, htfSupports) {
                 `Clearance: ${pathCheck.clearance.toFixed(5)} | SL Distance: ${slDistance.toFixed(5)} | ` +
                 `Nearest HTF Support: ${pathCheck.nearestLevel}`
             );
-            return null;
+            return { rejected: true };
         }
 
         // ── TP Calculation ────────────────────────────────────────────────────
@@ -266,7 +266,7 @@ function findHS(candles, type, symbol, htfResistances, htfSupports) {
         // ── Rule 1: HTF Catalyst Confluence — Head at HTF Support ────────────
         if (!isHeadAtHTFZone(head.val, htfSupports, "buy")) {
             console.log(`❌ [${symbol}] REJECTED: Head did not form at HTF Support.`);
-            return null;
+            return { rejected: true };
         }
 
         // ── Rule 2: Path Clearance — No HTF Resistance blocking the buy path ─
@@ -279,7 +279,7 @@ function findHS(candles, type, symbol, htfResistances, htfSupports) {
                 `Clearance: ${pathCheck.clearance.toFixed(5)} | SL Distance: ${slDistance.toFixed(5)} | ` +
                 `Nearest HTF Resistance: ${pathCheck.nearestLevel}`
             );
-            return null;
+            return { rejected: true };
         }
 
         // ── TP Calculation ────────────────────────────────────────────────────
