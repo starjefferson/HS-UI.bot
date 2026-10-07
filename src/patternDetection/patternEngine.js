@@ -20,7 +20,7 @@ import { detectPatterns } from "./headShoulders.js";
  *    "1H": [...],   // Hourly candles — breakout trigger only
  *  }
  */
-export function runDetection(candleData, symbol, expectedBias) {
+export function runDetection(candleData, symbol, expectedBias, onPatternDetected) {
     // ── 1. Structural detection on 4H and 1D only ────────────────────────────
     const structuralTFs = ["4H", "1D"];
     let detectedSetups  = {};
@@ -70,13 +70,24 @@ export function runDetection(candleData, symbol, expectedBias) {
     // Validate the target before checking whether the 1H breakout has occurred.
     const isSell = structuralSetup.type === "sell";
     if (isSell && structuralSetup.tp >= structuralSetup.necklineLow) {
-        console.log(`❌ [${symbol}] Logic Error: Sell TP is above Neckline. Pattern rejected.`);
+        console.log(
+            `❌ [${symbol}] REJECTED: Sell TP must be below neckline | ` +
+            `TP: ${structuralSetup.tp} | Neckline Low: ${structuralSetup.necklineLow}`
+        );
         return null;
     }
     if (!isSell && structuralSetup.tp <= structuralSetup.necklineHigh) {
-        console.log(`❌ [${symbol}] Logic Error: Buy TP is below Neckline. Pattern rejected.`);
+        console.log(
+            `❌ [${symbol}] REJECTED: Buy TP must be above neckline | ` +
+            `TP: ${structuralSetup.tp} | Neckline High: ${structuralSetup.necklineHigh}`
+        );
         return null;
     }
+
+    onPatternDetected?.({
+        type: structuralSetup.type,
+        activeTFs: Object.keys(detectedSetups)
+    });
 
     // ── 4. 1H Breakout Trigger — closed 1H candle must breach the neckline ───
     const h1Candles = candleData["1H"];

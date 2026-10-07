@@ -120,6 +120,26 @@ async function ensureSynced() {
 }
 
 /**
+ * Verifies that the account connection is active before starting a symbol scan.
+ */
+export async function ensureMetaApiConnection() {
+  const { account, connection } = await ensureSynced();
+  const isConnectionActive = typeof account.isConnectionActive === "function"
+    ? await account.isConnectionActive()
+    : account.isConnectionActive;
+  const isSynchronized = typeof connection.isSynchronized === "function"
+    ? connection.isSynchronized()
+    : connection.isSynchronized;
+
+  if (isConnectionActive === false || isSynchronized === false) {
+    console.warn("🔄 [MetaApi] Account connection is inactive. Waiting for reconnection...");
+    await account.waitConnected();
+    await connection.waitSynchronized();
+    lastSyncedAt = Date.now();
+  }
+}
+
+/**
  * Map strategy timeframes to MetaApi granularity format
  */
 export function getMetaApiTimeframe(tf) {

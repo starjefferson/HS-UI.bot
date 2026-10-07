@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
-import { getCandles, getAccountBalance, placeOrder, getOpenPositions, getSymbolPrice } from "./src/metaApi.js";
+import { getCandles, getAccountBalance, placeOrder, getOpenPositions, getSymbolPrice, ensureMetaApiConnection } from "./src/metaApi.js";
 import { runDetection } from "./src/patternDetection/patternEngine.js";
 import * as goldGuard from "./src/risk/goldGuard.js";
 import { canExecuteCorrelatedTrade } from "./src/risk/correlationGuard.js";
@@ -66,22 +66,17 @@ async function runTradingCycle() {
   const openPositions = await getOpenPositions();
 
   for (const symbol of PAIRS) {
+    let finalStatus = `⏭️ [${symbol}] Status: Scan complete (No valid setup)`;
     try {
-      // 1. Fetch historical candles for 1W, 1D, 4H, 1H from MetaApi
+      // Stage 1: Fetch historical candles for all scan timeframes.
+      console.log(`📥 [${symbol}] Fetching candles: W1, D1, H4, H1...`);
+      await ensureMetaApiConnection();
       const w1 = await getCandles(symbol, "1W", 50);
       const d1 = await getCandles(symbol, "1D", 200);
       const h4 = await getCandles(symbol, "4H", 200);
       const h1 = await getCandles(symbol, "1H", 200);
 
-      if (!w1 || !d1 || !h4 || !h1 || h1.length < 200) {
-        console.log(`⚠️ [${symbol}] Insufficient candle history returned from MetaApi.`);
-        continue;
-      }
-
       const candleData = { "1W": w1, "1D": d1, "4H": h4, "1H": h1 };
-      const currentPrice = h1[0].close;
-
-      // 2. Trend Alignment (3/4 SMA Rule)
       const getDir = (tf) => {
         const d = candleData[tf];
         if (!d || d.length < 20) return "none";
@@ -89,18 +84,45 @@ async function runTradingCycle() {
         return (sma && d[0].close > sma) ? "buy" : "sell";
       };
 
+      // Stage 2: Trend alignment (3/4 SMA Rule).
       const t = { W1: getDir("1W"), D1: getDir("1D"), H4: getDir("4H"), H1: getDir("1H") };
       const buyPoints = Object.values(t).filter(v => v === "buy").length;
       const sellPoints = Object.values(t).filter(v => v === "sell").length;
       const bias = (buyPoints >= 3) ? "buy" : (sellPoints >= 3) ? "sell" : "none";
-
       console.log(`📡 [${symbol}] Trends | W1:${t.W1} D1:${t.D1} H4:${t.H4} H1:${t.H1} | Bias: ${bias.toUpperCase()}`);
 
-      if (bias === "none") continue;
+      if (!w1 || !d1 || !h4 || !h1 || h1.length < 200) {
+        console.log(`⚠️ [${symbol}] Insufficient candle history returned from MetaApi.`);
+        console.log(`ℹ️ [${symbol}] No valid Head & Shoulders pattern detected.`);
+        continue;
+      }
 
-      // 3. Pattern Detection Engine
-      const pattern = runDetection(candleData, symbol, bias);
-      if (!pattern) continue;
+      const currentPrice = h1[0].close;
+
+      if (bias === "none") {
+        console.log(`ℹ️ [${symbol}] No valid Head & Shoulders pattern detected.`);
+        continue;
+      }
+
+      // Stage 3: Pattern detection; the callback also reports valid structures
+      // that are still waiting for their 1H breakout.
+      let patternDetected = false;
+      const pattern = runDetection(candleData, symbol, bias, ({ type, activeTFs }) => {
+        patternDetected = true;
+        console.log(`✅ [${symbol}] H&S Pattern Detected: [${type.toUpperCase()}/${activeTFs.join("+")}]`);
+        finalStatus = `⏭️ [${symbol}] Status: Scan complete (No valid setup)`;
+      });
+
+      if (!patternDetected) {
+        console.log(`ℹ️ [${symbol}] No valid Head & Shoulders pattern detected.`);
+      }
+
+      if (!pattern) {
+        if (patternDetected) {
+          finalStatus = `⏳ [${symbol}] Pending: Waiting for neckline break`;
+        }
+        continue;
+      }
 
       // 4. Pattern Fingerprinting Guard (One & Done)
       const patternID = `${symbol}_${pattern.type}_${pattern.headTime}`;
@@ -113,11 +135,11 @@ async function runTradingCycle() {
       const isJpy = symbol.includes("JPY");
       const tooFar = isJpy ? 0.20 : 0.0020;
       if (pattern.type === "sell" && currentPrice < (pattern.necklineLow - tooFar)) {
-        console.log(`❌ [${symbol}] Setup Expired: Price already distributed past neckline.`);
+        console.log(`❌ [${symbol}] REJECTED: Setup expired below neckline | Price: ${currentPrice} | Neckline: ${pattern.necklineLow} | Allowed distance: ${tooFar}`);
         continue;
       }
       if (pattern.type === "buy" && currentPrice > (pattern.necklineHigh + tooFar)) {
-        console.log(`❌ [${symbol}] Setup Expired: Price already distributed past neckline.`);
+        console.log(`❌ [${symbol}] REJECTED: Setup expired above neckline | Price: ${currentPrice} | Neckline: ${pattern.necklineHigh} | Allowed distance: ${tooFar}`);
         continue;
       }
 
@@ -127,6 +149,7 @@ async function runTradingCycle() {
 
       if (!isBreakout) {
         console.log(`⏳ [${symbol}] Pattern Valid. Waiting for breakout close past zone [${pattern.necklineLow} - ${pattern.necklineHigh}]`);
+        finalStatus = `⏳ [${symbol}] Pending: Waiting for neckline break`;
         continue;
       }
 
@@ -136,7 +159,7 @@ async function runTradingCycle() {
       const rr = reward / risk;
 
       if (rr < MIN_RR || rr > MAX_RR) {
-        console.log(`⚠️ [${symbol}] Rejected RR: ${rr.toFixed(2)} (Target: ${MIN_RR} - ${MAX_RR})`);
+        console.log(`❌ [${symbol}] REJECTED: Risk-to-reward outside allowed range | RR: ${rr.toFixed(2)} | Required: ${MIN_RR}-${MAX_RR} | Risk: ${risk} | Reward: ${reward}`);
         continue;
       }
 
@@ -146,7 +169,7 @@ async function runTradingCycle() {
       const tradesThisWeek = history.filter(h => (nowMs - new Date(h.executionTime).getTime()) < oneWeekMs);
       
       if (tradesThisWeek.length >= 10) {
-        console.log(`🚫 [${symbol}] Risk Manager: Weekly trade limit (10 trades/week) reached (${tradesThisWeek.length}/10). Skipping.`);
+        console.log(`❌ [${symbol}] REJECTED: Weekly trade limit reached | Trades: ${tradesThisWeek.length} | Required: <10`);
         continue;
       }
 
@@ -157,7 +180,7 @@ async function runTradingCycle() {
       // trades, preventing dangerous cluster exposure to a single currency.
       const correlationCheck = canExecuteCorrelatedTrade(symbol, openPositions);
       if (!correlationCheck.isAllowed) {
-        console.log(`[CORRELATION GUARD] ${symbol} blocked: ${correlationCheck.reason}`);
+        console.log(`❌ [${symbol}] REJECTED: Currency correlation guard | Reason: ${correlationCheck.reason}`);
         continue;
       }
 
@@ -169,19 +192,19 @@ async function runTradingCycle() {
           if (priceInfo?.bid && priceInfo?.ask) {
             const spreadCheck = goldGuard.validateGoldSpread(priceInfo.bid, priceInfo.ask);
             if (!spreadCheck.allowed) {
-              console.log(`[GOLD GUARD] ${symbol} blocked: Spread too wide ($${spreadCheck.spread}).`);
+              console.log(`❌ [${symbol}] REJECTED: Gold spread too wide | Spread: $${spreadCheck.spread}`);
               continue;
             }
           }
-        } catch (_) {
+        } catch (err) {
           // Non-fatal — if price fetch fails, skip spread check for this cycle
-          console.warn(`[GOLD GUARD] ${symbol}: Spread check skipped (price fetch error).`);
+          console.warn(`[GOLD GUARD] ${symbol}: Spread check skipped (price fetch error): ${err?.message || String(err)}`);
         }
 
         // Gold Distribution Guard: rejects if price moved > $3.00 past neckline
         const necklineRef = pattern.type === "sell" ? pattern.necklineLow : pattern.necklineHigh;
         if (goldGuard.isGoldDistributed(currentPrice, necklineRef)) {
-          console.log(`[GOLD GUARD] ${symbol} blocked: Price distributed > $3.00 past neckline.`);
+          console.log(`❌ [${symbol}] REJECTED: Gold price distributed past neckline | Price: ${currentPrice} | Neckline: ${necklineRef} | Maximum distance: $3.00`);
           continue;
         }
       }
@@ -202,7 +225,7 @@ async function runTradingCycle() {
       });
 
       if (orderResult) {
-        console.log(`🚀 [MetaApi] Order Executed Successfully for ${symbol}! Order ID: ${orderResult.contract_id}`);
+        finalStatus = `🚀 [${symbol}] Action: Executing Trade / Sending Alert | Order ID: ${orderResult.contract_id}`;
 
         // Record in history.json via async historyLogger (non-blocking)
         logTradeOpen({
@@ -221,10 +244,17 @@ async function runTradingCycle() {
         // Keep the synchronous in-memory history array up to date so the
         // fingerprinting guard (step 4) works correctly within the same cycle.
         history.push({ patternID, executionTime: new Date().toISOString() });
+      } else {
+        console.error(`❌ [${symbol}] Trade execution failed: MetaApi did not return an order result.`);
+        finalStatus = `❌ [${symbol}] Status: Trade execution failed`;
       }
 
     } catch (err) {
-      console.error(`❌ Critical Error processing ${symbol}:`, err.message);
+      const message = err?.message || String(err);
+      console.error(`❌ [${symbol}] Scan skipped due to RPC error: ${message}`);
+      finalStatus = `❌ [${symbol}] Status: Scan skipped due to RPC error`;
+    } finally {
+      console.log(finalStatus);
     }
   }
 }
