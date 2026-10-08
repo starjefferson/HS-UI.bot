@@ -18,6 +18,11 @@ import { detectPatterns } from "./headShoulders.js";
  *  }
  */
 export function runDetection(candleData, symbol, expectedBias, onPatternDetected) {
+    if (expectedBias !== "buy" && expectedBias !== "sell") {
+        console.log(`⚠️ [${symbol}] Pattern detection skipped: directional trend bias is required.`);
+        return null;
+    }
+
     // ── 1. Structural detection on 4H and 1D only ────────────────────────────
     const structuralTFs = ["4H", "1D"];
     let detectedSetups  = {};
@@ -27,16 +32,17 @@ export function runDetection(candleData, symbol, expectedBias, onPatternDetected
             let geometryFound = false;
             const result = detectPatterns(
                 candleData[tf], // structural candles
+                expectedBias,
                 ({ type, stage }) => {
                     if (stage === "geometry") {
                         geometryFound = true;
                         console.log(
-                            `🔎 [${symbol}] ${tf} ${type.toUpperCase()} pattern geometry confirmed; ` +
+                            `🔎 [${symbol}] ${tf} ${type.toUpperCase()} geometry matches trend bias; ` +
                             `evaluating historical TP/RR.`
                         );
                     } else if (stage === "tp-rejected") {
                         console.log(
-                            `❌ [${symbol}] ${tf} ${type.toUpperCase()} geometry rejected: ` +
+                            `❌ [${symbol}] ${tf} ${type.toUpperCase()} geometry is valid but setup rejected: ` +
                             `invalid risk distance or historical S/R target below the 2.5R minimum.`
                         );
                     }
@@ -45,7 +51,10 @@ export function runDetection(candleData, symbol, expectedBias, onPatternDetected
             if (result) {
                 detectedSetups[tf] = result;
             } else if (!geometryFound) {
-                console.log(`ℹ️ [${symbol}] No geometrically valid H&S pattern found on ${tf}.`);
+                console.log(
+                    `ℹ️ [${symbol}] No ${expectedBias.toUpperCase()} H&S geometry found on ${tf}; ` +
+                    `opposite-bias patterns are ignored.`
+                );
             }
         }
     }

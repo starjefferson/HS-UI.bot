@@ -12,21 +12,14 @@
  * Detects H&S / Inverted H&S patterns on the supplied candle array.
  *
  * @param {Array}  candles - Structural candles (4H or 1D timeframe)
+ * @param {"sell"|"buy"} expectedType - Pattern direction matching trend bias
  * @param {Function} [onDiagnostic] - Reports geometry and TP/RR evaluation stages
  * @returns {Object|null}
  */
-export function detectPatterns(candles, onDiagnostic) {
+export function detectPatterns(candles, expectedType, onDiagnostic) {
     if (!candles || candles.length < 200) return null;
 
-    // Scan for Sell (Head and Shoulders)
-    const hs = findHS(candles, "sell", onDiagnostic);
-    if (hs) return hs;
-
-    // Scan for Buy (Inverted Head and Shoulders)
-    const ihs = findHS(candles, "buy", onDiagnostic);
-    if (ihs) return ihs;
-
-    return null;
+    return findHS(candles, expectedType, onDiagnostic);
 }
 
 // ─── Internal Pattern Finder ─────────────────────────────────────────────────

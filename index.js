@@ -114,7 +114,10 @@ async function runTradingCycle() {
       });
 
       if (!patternDetected) {
-        console.log(`ℹ️ [${symbol}] No tradable setup found; review the pattern-stage diagnostics above.`);
+        console.log(
+          `ℹ️ [${symbol}] No ${bias.toUpperCase()} setup passed geometry, TP/RR, ` +
+          `multi-timeframe agreement, and 1H trigger checks.`
+        );
       }
 
       if (!pattern) {
