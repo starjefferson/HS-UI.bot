@@ -4,159 +4,25 @@
  *
  * Uses candle timestamps to generate unique patternID fingerprints in index.js,
  * preventing the same pattern from being traded twice across scan cycles.
- *
- * HTF Confluence Rules (applied here, not in patternEngine):
- *  - HEAD must originate near a 1D/1W Resistance (SELL) or Support (BUY) zone.
- *  - The breakout path must have >= 1.0x SL distance of clearance before the
- *    nearest opposing HTF zone.
  */
-
-// ─── HTF Zone Generation ────────────────────────────────────────────────────
-
-/**
- * Generates HTF Support & Resistance zones from a candle array.
- * Uses a wider pivot radius (10 bars) suitable for daily/weekly candles.
- *
- * @param {Array} candles  - Array of candle objects { high, low, close, ... }
- * @returns {{ resistances: number[], supports: number[] }}
- */
-export function generateHTFZones(candles) {
-    if (!candles || candles.length < 20) return { resistances: [], supports: [] };
-
-    const radius = 10;
-    const limit  = candles.length - radius;
-    const resistances = [];
-    const supports    = [];
-
-    for (let i = radius; i < limit; i++) {
-        const window = candles.slice(i - radius, i + radius + 1);
-        const windowHighs = window.map(c => c.high);
-        const windowLows  = window.map(c => c.low);
-
-        // Swing high → Resistance zone (stored as the candle high)
-        if (candles[i].high === Math.max(...windowHighs)) {
-            resistances.push(candles[i].high);
-        }
-
-        // Swing low → Support zone (stored as the candle low)
-        if (candles[i].low === Math.min(...windowLows)) {
-            supports.push(candles[i].low);
-        }
-    }
-
-    return { resistances, supports };
-}
-
-// ─── HTF Catalyst Confluence (Head Position) ────────────────────────────────
-
-/**
- * Checks whether a Head peak or valley originated at a qualifying HTF zone.
- *
- * For a SELL setup the head is a peak — it must be near or inside a HTF
- * Resistance level (i.e. head HIGH ≈ resistance, meaning price was rejected
- * from above by that level).
- *
- * For a BUY setup the head is a valley — it must be near or inside a HTF
- * Support level (i.e. head LOW ≈ support, meaning price bounced from below).
- *
- * Proximity tolerance: within 0.3 % of the HTF zone level.
- *
- * @param {number}   headVal    - The head's extreme price (high for sell, low for buy)
- * @param {number[]} htfLevels  - Array of HTF resistance (sell) or support (buy) prices
- * @param {"sell"|"buy"} type
- * @returns {boolean}
- */
-function isHeadAtHTFZone(headVal, htfLevels, type) {
-    if (!htfLevels || htfLevels.length === 0) return false;
-    const tolerancePct = 0.003; // 0.3 %
-
-    for (const level of htfLevels) {
-        const tolerance = level * tolerancePct;
-        if (type === "sell") {
-            // Head peak should be at or just below a resistance level
-            if (headVal >= level - tolerance && headVal <= level + tolerance) return true;
-        } else {
-            // Head valley should be at or just above a support level
-            if (headVal >= level - tolerance && headVal <= level + tolerance) return true;
-        }
-    }
-    return false;
-}
-
-// ─── Path Clearance Guard (Obstacle at Breakout Entry) ──────────────────────
-
-/**
- * Determines whether there is sufficient clearance between the neckline entry
- * and the nearest opposing HTF zone in the direction of the trade.
- *
- * Rule: clearance must be >= 1.0x the SL distance; otherwise reject.
- *
- * @param {number}   entryPrice   - Neckline breakout price (1H trigger level)
- * @param {number}   slDistance   - Absolute distance from entry to SL
- * @param {number[]} htfLevels    - Opposing HTF zone levels
- *                                  (HTF Supports for SELL, HTF Resistances for BUY)
- * @param {"sell"|"buy"} type
- * @returns {{ clear: boolean, nearestLevel: number|null, clearance: number }}
- */
-function getPathClearance(entryPrice, slDistance, htfLevels, type) {
-    if (!htfLevels || htfLevels.length === 0) {
-        return { clear: true, nearestLevel: null, clearance: Infinity };
-    }
-
-    let nearestLevel = null;
-    let clearance    = Infinity;
-
-    if (type === "sell") {
-        // For SELL: find nearest HTF Support BELOW entry (top edge = the level itself)
-        const below = htfLevels.filter(l => l < entryPrice);
-        if (below.length > 0) {
-            nearestLevel = Math.max(...below); // closest one beneath entry
-            clearance    = entryPrice - nearestLevel; // distance to top edge of support
-        }
-    } else {
-        // For BUY: find nearest HTF Resistance ABOVE entry (bottom edge = level itself)
-        const above = htfLevels.filter(l => l > entryPrice);
-        if (above.length > 0) {
-            nearestLevel = Math.min(...above); // closest one above entry
-            clearance    = nearestLevel - entryPrice; // distance to bottom edge of resistance
-        }
-    }
-
-    const clear = clearance >= slDistance * 1.0;
-    return { clear, nearestLevel, clearance };
-}
 
 // ─── Public Detection Entry Point ────────────────────────────────────────────
 
 /**
  * Detects H&S / Inverted H&S patterns on the supplied candle array.
  *
- * HTF confluence filters are applied here using 1D and 1W candle data:
- *   1. Head must be at a qualifying HTF Resistance (sell) or Support (buy) zone.
- *   2. Breakout path must clear the nearest opposing HTF zone by >= 1.0x SL distance.
- *
- * @param {Array}  candles        - Structural candles (4H or 1D timeframe)
- * @param {Array}  htf1DCandles   - Daily candles for HTF zone generation
- * @param {Array}  htf1WCandles   - Weekly candles for HTF zone generation
- * @param {string} [symbol]       - Symbol string for logging
+ * @param {Array}  candles - Structural candles (4H or 1D timeframe)
  * @returns {Object|null}
  */
-export function detectPatterns(candles, htf1DCandles, htf1WCandles, symbol = "UNKNOWN") {
+export function detectPatterns(candles) {
     if (!candles || candles.length < 200) return null;
 
-    // Build combined HTF zones from 1D and 1W candles
-    const zones1D = generateHTFZones(htf1DCandles || []);
-    const zones1W = generateHTFZones(htf1WCandles || []);
-
-    const htfResistances = [...zones1D.resistances, ...zones1W.resistances];
-    const htfSupports    = [...zones1D.supports,    ...zones1W.supports];
-
     // Scan for Sell (Head and Shoulders)
-    const hs = findHS(candles, "sell", symbol, htfResistances, htfSupports);
+    const hs = findHS(candles, "sell");
     if (hs) return hs;
 
     // Scan for Buy (Inverted Head and Shoulders)
-    const ihs = findHS(candles, "buy", symbol, htfResistances, htfSupports);
+    const ihs = findHS(candles, "buy");
     if (ihs) return ihs;
 
     return null;
@@ -169,12 +35,9 @@ export function detectPatterns(candles, htf1DCandles, htf1WCandles, symbol = "UN
  *
  * @param {Array}    candles         - Structural candles (4H or 1D)
  * @param {"sell"|"buy"} type
- * @param {string}   symbol          - For logging
- * @param {number[]} htfResistances  - Combined 1D+1W resistance levels
- * @param {number[]} htfSupports     - Combined 1D+1W support levels
  * @returns {Object|null}
  */
-function findHS(candles, type, symbol, htfResistances, htfSupports) {
+function findHS(candles, type) {
     const mainData    = type === "sell" ? candles.map(c => c.high) : candles.map(c => c.low);
     const supportData = type === "sell" ? candles.map(c => c.low)  : candles.map(c => c.high);
 
@@ -217,25 +80,6 @@ function findHS(candles, type, symbol, htfResistances, htfSupports) {
         const slPrice    = s2.val + (s2.val > 50 ? jpyBuffer : pipBuffer);
         const entryPrice = nLow; // Neckline breakout level
 
-        // ── Rule 1: HTF Catalyst Confluence — Head at HTF Resistance ─────────
-        if (!isHeadAtHTFZone(head.val, htfResistances, "sell")) {
-            console.log(`❌ [${symbol}] REJECTED: Head did not form at HTF Resistance.`);
-            return { rejected: true };
-        }
-
-        // ── Rule 2: Path Clearance — No HTF Support blocking the sell path ───
-        const slDistance = Math.abs(entryPrice - slPrice);
-        const pathCheck  = getPathClearance(entryPrice, slDistance, htfSupports, "sell");
-        if (!pathCheck.clear) {
-            console.log(
-                `❌ [${symbol}] REJECTED: Insufficient clearance to opposing HTF Zone ` +
-                `(Requires >= 1.0x SL distance). ` +
-                `Clearance: ${pathCheck.clearance.toFixed(5)} | SL Distance: ${slDistance.toFixed(5)} | ` +
-                `Nearest HTF Support: ${pathCheck.nearestLevel}`
-            );
-            return { rejected: true };
-        }
-
         // ── TP Calculation ────────────────────────────────────────────────────
         const tpResult = calculateHistoricalTP(candles, entryPrice, slPrice, "sell");
         if (!tpResult) return null; // Rejected if key support too close (RR < 2.5)
@@ -262,25 +106,6 @@ function findHS(candles, type, symbol, htfResistances, htfSupports) {
 
         const slPrice    = s2.val - (s2.val > 50 ? jpyBuffer : pipBuffer);
         const entryPrice = nHigh; // Neckline breakout level
-
-        // ── Rule 1: HTF Catalyst Confluence — Head at HTF Support ────────────
-        if (!isHeadAtHTFZone(head.val, htfSupports, "buy")) {
-            console.log(`❌ [${symbol}] REJECTED: Head did not form at HTF Support.`);
-            return { rejected: true };
-        }
-
-        // ── Rule 2: Path Clearance — No HTF Resistance blocking the buy path ─
-        const slDistance = Math.abs(entryPrice - slPrice);
-        const pathCheck  = getPathClearance(entryPrice, slDistance, htfResistances, "buy");
-        if (!pathCheck.clear) {
-            console.log(
-                `❌ [${symbol}] REJECTED: Insufficient clearance to opposing HTF Zone ` +
-                `(Requires >= 1.0x SL distance). ` +
-                `Clearance: ${pathCheck.clearance.toFixed(5)} | SL Distance: ${slDistance.toFixed(5)} | ` +
-                `Nearest HTF Resistance: ${pathCheck.nearestLevel}`
-            );
-            return { rejected: true };
-        }
 
         // ── TP Calculation ────────────────────────────────────────────────────
         const tpResult = calculateHistoricalTP(candles, entryPrice, slPrice, "buy");

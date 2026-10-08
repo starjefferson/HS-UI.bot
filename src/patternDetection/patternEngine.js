@@ -8,14 +8,11 @@ import { detectPatterns } from "./headShoulders.js";
  *    identified on these timeframes. 1H is NOT used for structure.
  *  - ENTRY TRIGGER:        A closed 1H candle breaking through the 4H/1D
  *    neckline zone is the sole execution trigger.
- *  - HTF CONFLUENCE:       1D and 1W candle data is passed into detectPatterns
- *    so that the Head-at-HTF-Zone and Path-Clearance rules are enforced inside
- *    headShoulders.js before a setup is returned here.
  *
  * candleData shape expected:
  *  {
- *    "1W": [...],   // Weekly candles — HTF zone generation only
- *    "1D": [...],   // Daily candles  — structural detection + HTF zones
+ *    "1W": [...],   // Weekly candles — trend alignment
+ *    "1D": [...],   // Daily candles  — structural detection + trend alignment
  *    "4H": [...],   // 4-Hour candles — structural detection
  *    "1H": [...],   // Hourly candles — breakout trigger only
  *  }
@@ -28,12 +25,8 @@ export function runDetection(candleData, symbol, expectedBias, onPatternDetected
     for (const tf of structuralTFs) {
         if (candleData[tf] && candleData[tf].length >= 200) {
             const result = detectPatterns(
-                candleData[tf],        // structural candles
-                candleData["1D"] || [], // HTF 1D candles for zone generation
-                candleData["1W"] || [], // HTF 1W candles for zone generation
-                symbol
+                candleData[tf] // structural candles
             );
-            if (result?.rejected) return null;
             if (result) {
                 detectedSetups[tf] = result;
             }
