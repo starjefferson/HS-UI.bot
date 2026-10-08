@@ -7,6 +7,7 @@ import { runDetection } from "./src/patternDetection/patternEngine.js";
 import * as goldGuard from "./src/risk/goldGuard.js";
 import { canExecuteCorrelatedTrade } from "./src/risk/correlationGuard.js";
 import { logTradeOpen } from "./src/utils/historyLogger.js";
+import { config } from "./config.js";
 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -28,9 +29,21 @@ const PAIRS = [
 ];
 
 const HISTORY_PATH = "./history.json";
-const RISK_PERCENT = parseFloat(process.env.RISK_PERCENT || "2.0");
-const MIN_RR = parseFloat(process.env.MIN_RR || "2.5");
-const MAX_RR = parseFloat(process.env.MAX_RR || "3.0");
+const RISK_PERCENT = Number(process.env.RISK_PERCENT ?? config.riskPercent);
+const MIN_RR = Number(process.env.MIN_RR ?? config.rrRatio);
+const BREAKOUT_BUFFER_PIPS = Number(
+  process.env.BREAKOUT_BUFFER_PIPS ?? config.breakoutBufferPips
+);
+
+if (!Number.isFinite(RISK_PERCENT) || RISK_PERCENT <= 0 || RISK_PERCENT > config.riskPercent) {
+  throw new Error(`RISK_PERCENT must be greater than 0 and no more than ${config.riskPercent}.`);
+}
+if (!Number.isFinite(MIN_RR) || MIN_RR < 2.5) {
+  throw new Error("MIN_RR must be at least 2.5.");
+}
+if (!Number.isFinite(BREAKOUT_BUFFER_PIPS) || BREAKOUT_BUFFER_PIPS < 0) {
+  throw new Error("BREAKOUT_BUFFER_PIPS must be a finite non-negative number.");
+}
 
 const loadJSON = (f) => {
   try {
@@ -50,6 +63,12 @@ const calculateSMA = (data, period) => {
   return sum / period;
 };
 
+function getPipSize(symbol) {
+  if (symbol.includes("JPY")) return 0.01;
+  if (symbol.includes("XAU") || symbol.includes("GOLD")) return 0.01;
+  return 0.0001;
+}
+
 /**
  * Central Scan Cycle for IC Markets via MetaApi
  */
@@ -59,7 +78,13 @@ async function runTradingCycle() {
   console.log(`==================================================`);
 
   const history = loadJSON(HISTORY_PATH);
-  const balance = await getAccountBalance();
+  let balance;
+  try {
+    balance = await getAccountBalance();
+  } catch (error) {
+    console.error(`❌ [MetaApi] Market scan aborted: account equity is unavailable (${error.message || error}).`);
+    return;
+  }
 
   // Fetch live open positions once per cycle for the correlation guard.
   // Degrades gracefully to [] on error — guard will pass all trades through.
@@ -107,23 +132,36 @@ async function runTradingCycle() {
       // Stage 3: Pattern detection; the callback also reports valid structures
       // that are still waiting for their 1H breakout.
       let patternDetected = false;
-      const pattern = runDetection(candleData, symbol, bias, ({ type, activeTFs }) => {
+      const pattern = runDetection(candleData, symbol, bias, ({ type, activeTFs, stage }) => {
         patternDetected = true;
-        console.log(`✅ [${symbol}] H&S Pattern Detected: [${type.toUpperCase()}/${activeTFs.join("+")}]`);
-        finalStatus = `⏭️ [${symbol}] Status: Scan complete (No valid setup)`;
+        if (stage === "waiting-breakout" || stage === "waiting-data") {
+          console.log(`✅ [${symbol}] H&S Pattern Detected: [${type.toUpperCase()}/${activeTFs.join("+")}]`);
+          finalStatus = `⏳ [${symbol}] Pending: Waiting for neckline break`;
+        } else if (stage === "breakout-missed") {
+          console.log(`ℹ️ [${symbol}] Pattern [${type.toUpperCase()}/${activeTFs.join("+")}] breakout already occurred; re-entry disabled.`);
+          finalStatus = `⏭️ [${symbol}] Status: Scan complete (Breakout missed; no re-entry)`;
+        } else if (stage === "breakout-history-insufficient") {
+          finalStatus = `⏭️ [${symbol}] Status: Scan complete (Breakout history unavailable; no entry)`;
+        } else if (stage === "breakout-confirmed") {
+          console.log(`✅ [${symbol}] H&S Pattern Detected: [${type.toUpperCase()}/${activeTFs.join("+")}]`);
+          finalStatus = `⏭️ [${symbol}] Status: Scan complete (No valid setup)`;
+        } else if (stage === "invalid-levels") {
+          finalStatus = `⏭️ [${symbol}] Status: Scan complete (Invalid trade levels)`;
+        } else if (stage === "rr-rejected") {
+          finalStatus = `⏭️ [${symbol}] Status: Scan complete (Breakout close below minimum RR)`;
+        }
+      }, {
+        breakoutBuffer: getPipSize(symbol) * BREAKOUT_BUFFER_PIPS,
+        minimumRR: MIN_RR
       });
 
       if (!patternDetected) {
         console.log(
-          `ℹ️ [${symbol}] No ${bias.toUpperCase()} setup passed geometry, TP/RR, ` +
-          `multi-timeframe agreement, and 1H trigger checks.`
+          `ℹ️ [${symbol}] No actionable setup returned; see pattern geometry and timeframe diagnostics above.`
         );
       }
 
       if (!pattern) {
-        if (patternDetected) {
-          finalStatus = `⏳ [${symbol}] Pending: Waiting for neckline break`;
-        }
         continue;
       }
 
@@ -134,35 +172,23 @@ async function runTradingCycle() {
         continue;
       }
 
-      // 5. Distribution Guard (Stop chasing if price moved too far)
-      const isJpy = symbol.includes("JPY");
-      const tooFar = isJpy ? 0.20 : 0.0020;
-      if (pattern.type === "sell" && currentPrice < (pattern.necklineLow - tooFar)) {
-        console.log(`❌ [${symbol}] REJECTED: Setup expired below neckline | Price: ${currentPrice} | Neckline: ${pattern.necklineLow} | Allowed distance: ${tooFar}`);
-        continue;
-      }
-      if (pattern.type === "buy" && currentPrice > (pattern.necklineHigh + tooFar)) {
-        console.log(`❌ [${symbol}] REJECTED: Setup expired above neckline | Price: ${currentPrice} | Neckline: ${pattern.necklineHigh} | Allowed distance: ${tooFar}`);
-        continue;
-      }
+      // 7. Require pattern-based reward to preserve the configured minimum RR.
+      const entryPrice = pattern.entryPrice;
+      const risk = pattern.type === "sell"
+        ? pattern.sl - entryPrice
+        : entryPrice - pattern.sl;
+      const reward = pattern.type === "sell"
+        ? entryPrice - pattern.tp
+        : pattern.tp - entryPrice;
+      const rr = risk > 0 ? reward / risk : NaN;
 
-      // 6. Breakout & Close Trigger Check
-      const isBreakout = (pattern.type === "sell" && currentPrice < pattern.necklineLow) ||
-                         (pattern.type === "buy" && currentPrice > pattern.necklineHigh);
-
-      if (!isBreakout) {
-        console.log(`⏳ [${symbol}] Pattern Valid. Waiting for breakout close past zone [${pattern.necklineLow} - ${pattern.necklineHigh}]`);
-        finalStatus = `⏳ [${symbol}] Pending: Waiting for neckline break`;
-        continue;
-      }
-
-      // 7. Risk-to-Reward (RR) Filter
-      const risk = Math.abs(currentPrice - pattern.sl);
-      const reward = Math.abs(pattern.tp - currentPrice);
-      const rr = reward / risk;
-
-      if (rr < MIN_RR || rr > MAX_RR) {
-        console.log(`❌ [${symbol}] REJECTED: Risk-to-reward outside allowed range | RR: ${rr.toFixed(2)} | Required: ${MIN_RR}-${MAX_RR} | Risk: ${risk} | Reward: ${reward}`);
+      if (!(risk > 0) || !(reward > 0) || !Number.isFinite(rr) || rr < MIN_RR) {
+        console.log(
+          `❌ [${symbol}] REJECTED: Invalid levels or breakout overextended below minimum RR | ` +
+          `Entry: ${entryPrice} | SL: ${pattern.sl} | TP: ${pattern.tp} | ` +
+          `RR: ${Number.isFinite(rr) ? rr.toFixed(2) : "invalid"} | Minimum: ${MIN_RR} | ` +
+          `Risk: ${risk} | Reward: ${reward}`
+        );
         continue;
       }
 
@@ -204,12 +230,6 @@ async function runTradingCycle() {
           console.warn(`[GOLD GUARD] ${symbol}: Spread check skipped (price fetch error): ${err?.message || String(err)}`);
         }
 
-        // Gold Distribution Guard: rejects if price moved > $3.00 past neckline
-        const necklineRef = pattern.type === "sell" ? pattern.necklineLow : pattern.necklineHigh;
-        if (goldGuard.isGoldDistributed(currentPrice, necklineRef)) {
-          console.log(`❌ [${symbol}] REJECTED: Gold price distributed past neckline | Price: ${currentPrice} | Neckline: ${necklineRef} | Maximum distance: $3.00`);
-          continue;
-        }
       }
 
 
@@ -217,14 +237,15 @@ async function runTradingCycle() {
 
       // 9. Order Execution via MetaApi
       const stakeAmount = balance * (RISK_PERCENT / 100);
-      console.log(`🎯 [${symbol}] TARGET RR ACHIEVED (${rr.toFixed(2)}). Placing IC Markets Order ($${stakeAmount.toFixed(2)} Risk Stake)...`);
+      console.log(`🎯 [${symbol}] RR ${rr.toFixed(2)} meets minimum ${MIN_RR}. Maximum risk budget: $${stakeAmount.toFixed(2)}.`);
 
       const orderResult = await placeOrder({
         symbol,
         amount: stakeAmount,
         side: pattern.type,
         sl: pattern.sl,
-        tp: pattern.tp
+        tp: pattern.tp,
+        minimumRR: MIN_RR
       });
 
       if (orderResult) {

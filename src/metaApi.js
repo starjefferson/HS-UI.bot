@@ -24,6 +24,7 @@ let apiInstance = null;
 let accountInstance = null;
 let connectionInstance = null;
 let isInitialized = false;
+let symbolsPromise = null;
 
 /**
  * Singleton helper to initialize, deploy, and connect to MetaApi Cloud once.
@@ -201,12 +202,15 @@ export async function getAccountBalance() {
   try {
     const { connection } = await ensureSynced();
     const info = await connection.getAccountInformation();
-    const balance = parseFloat(info.equity || info.balance || 1000);
-    console.log(`💰 [MetaApi] Connected Account Balance/Equity: $${balance.toFixed(2)}`);
+    const balance = Number(info?.equity ?? info?.balance);
+    if (!Number.isFinite(balance) || balance <= 0) {
+      throw new Error("MetaApi returned an invalid account equity/balance.");
+    }
+    console.log(`💰 [MetaApi] Connected Account Balance/Equity: ${info.currency} ${balance.toFixed(2)}`);
     return balance;
   } catch (error) {
     console.error("❌ [MetaApi] Balance fetch error:", error.message || error);
-    return 1000;
+    throw error;
   }
 }
 
@@ -232,10 +236,17 @@ export async function getSymbolPrice(symbol) {
 /**
  * Execute a market order on IC Markets MT5 via MetaApi RPC.
  */
-export async function placeOrder({ symbol, amount, side, sl, tp }) {
+export async function placeOrder({ symbol, amount, side, sl, tp, minimumRR }) {
   try {
     const { connection } = await ensureSynced();
-    const priceInfo = await connection.getSymbolPrice(symbol);
+    if (side !== "buy" && side !== "sell") {
+      throw new Error(`Invalid order side "${side}" for ${symbol}.`);
+    }
+    const [priceInfo, specification, accountInfo] = await Promise.all([
+      connection.getSymbolPrice(symbol),
+      connection.getSymbolSpecification(symbol),
+      connection.getAccountInformation()
+    ]);
 
     if (!priceInfo || !priceInfo.ask || !priceInfo.bid) {
       throw new Error(`Could not retrieve live market quote for ${symbol}`);
@@ -243,20 +254,53 @@ export async function placeOrder({ symbol, amount, side, sl, tp }) {
 
     const isBuy = side.toLowerCase() === "buy";
     const entryPrice = isBuy ? priceInfo.ask : priceInfo.bid;
-    const slDistance = Math.abs(entryPrice - sl);
+    const slDistance = isBuy ? entryPrice - sl : sl - entryPrice;
+    const rewardDistance = isBuy ? tp - entryPrice : entryPrice - tp;
 
-    if (slDistance === 0) {
-      throw new Error("Invalid Stop Loss distance (cannot be zero).");
+    if (!(slDistance > 0) || !(rewardDistance > 0) || !(amount > 0) || !Number.isFinite(amount)) {
+      throw new Error("Invalid order risk geometry or non-positive risk budget.");
     }
 
-    // Convert risk dollar amount into MT5 lot volume (0.01 lot min)
-    let riskPerLot = slDistance * 100000;
-    if (symbol.includes("JPY")) {
-      riskPerLot = (slDistance / entryPrice) * 100000;
+    const liveRR = rewardDistance / slDistance;
+    if (Number.isFinite(minimumRR) && liveRR < minimumRR) {
+      throw new Error(
+        `Live quote reduces ${symbol} risk/reward to ${liveRR.toFixed(2)}, below minimum ${minimumRR}.`
+      );
     }
 
-    let volume = amount / riskPerLot;
-    volume = Math.max(0.01, Math.round(volume * 100) / 100);
+    const profitCurrency = specification.profitCurrency;
+    const accountCurrency = accountInfo.currency;
+    const contractSize = specification.contractSize;
+    if (!profitCurrency || !accountCurrency || !(contractSize > 0)) {
+      throw new Error(`Missing contract or currency specification needed to size ${symbol} safely.`);
+    }
+
+    const currencyConversionRate = await getCurrencyConversionRate(
+      connection,
+      profitCurrency,
+      accountCurrency
+    );
+    const riskPerLot = slDistance * contractSize * currencyConversionRate;
+    if (!(riskPerLot > 0) || !Number.isFinite(riskPerLot)) {
+      throw new Error(`Could not calculate per-lot risk for ${symbol}.`);
+    }
+
+    const rawVolume = amount / riskPerLot;
+    const minimumVolume = specification.minVolume;
+    const volumeStep = specification.volumeStep;
+    if (!(minimumVolume > 0) || !(volumeStep > 0)) {
+      throw new Error(`Missing minimum volume or volume step for ${symbol}.`);
+    }
+    const maxVolume = specification.maxVolume;
+    const limitedVolume = Number.isFinite(maxVolume) ? Math.min(rawVolume, maxVolume) : rawVolume;
+    const volume = Number(
+      (Math.floor((limitedVolume + Number.EPSILON) / volumeStep) * volumeStep).toFixed(8)
+    );
+    if (volume < minimumVolume) {
+      throw new Error(
+        `Minimum ${minimumVolume} lot would exceed the ${accountCurrency} ${amount.toFixed(2)} risk budget for ${symbol}.`
+      );
+    }
 
     console.log(`🎯 [MetaApi] Placing ${side.toUpperCase()} on ${symbol} | Lot Size: ${volume} | Entry: ${entryPrice} | SL: ${sl} | TP: ${tp}`);
 
@@ -278,6 +322,40 @@ export async function placeOrder({ symbol, amount, side, sl, tp }) {
     console.error(`❌ [MetaApi] Order placement failed for ${symbol}:`, error.message || error);
     return null;
   }
+}
+
+async function getCurrencyConversionRate(connection, fromCurrency, toCurrency) {
+  if (fromCurrency === toCurrency) return 1;
+
+  if (!symbolsPromise) symbolsPromise = connection.getSymbols();
+  let symbols;
+  try {
+    symbols = await symbolsPromise;
+  } catch (error) {
+    symbolsPromise = null;
+    throw new Error(
+      `Could not retrieve symbols for ${fromCurrency}/${toCurrency} risk conversion: ${error.message || error}`
+    );
+  }
+
+  const normalized = (symbol) => symbol.toUpperCase().replace(/[^A-Z]/g, "");
+  const directPair = `${fromCurrency}${toCurrency}`;
+  const directSymbol = symbols.find(symbol => normalized(symbol).includes(directPair));
+  if (directSymbol) {
+    const price = await connection.getSymbolPrice(directSymbol);
+    if (Number.isFinite(price.ask) && price.ask > 0) return price.ask;
+  }
+
+  const inversePair = `${toCurrency}${fromCurrency}`;
+  const inverseSymbol = symbols.find(symbol => normalized(symbol).includes(inversePair));
+  if (inverseSymbol) {
+    const price = await connection.getSymbolPrice(inverseSymbol);
+    if (Number.isFinite(price.bid) && price.bid > 0) return 1 / price.bid;
+  }
+
+  throw new Error(
+    `No live ${fromCurrency}/${toCurrency} conversion quote is available; refusing unsafe position sizing.`
+  );
 }
 
 /**

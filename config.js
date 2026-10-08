@@ -15,7 +15,8 @@ export const config = {
   // 24-Hour continuous scanning (controlled by real-time spread guards)
   tradingHours: { start: 0, end: 24 },
 
-  // Risk & Reward Targets
-  rrRatio: 2.5,       // Target Risk-to-Reward ratio (2.5 or 3)
-  riskPercent: 5.0,   // Risk percentage per trade
+  // Trade risk and breakout confirmation
+  rrRatio: 2.5,              // Minimum risk-to-reward ratio
+  riskPercent: 3.0,           // Maximum account risk per trade
+  breakoutBufferPips: 2,      // Closed 1H candle must clear neckline region by this many pips
 };
