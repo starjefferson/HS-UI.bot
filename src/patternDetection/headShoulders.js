@@ -52,6 +52,22 @@ function findHS(candles, type, onDiagnostic) {
         if (gaps.some(gap => gap < 3 || gap > 60)) continue;
         if (leftShoulder.idx - rightShoulder.idx > 120) continue;
 
+        const invalidationCandle = candles
+            .slice(0, rightShoulder.idx)
+            .find(candle => type === "sell"
+                ? candle.high > head.val
+                : candle.low < head.val);
+        if (invalidationCandle) {
+            onDiagnostic?.({
+                type,
+                stage: "invalidated",
+                headPrice: head.val,
+                invalidationPrice: type === "sell" ? invalidationCandle.high : invalidationCandle.low,
+                invalidationTime: invalidationCandle.time
+            });
+            continue;
+        }
+
         const atr = calculatePatternATR(candles, rightShoulder.idx, leftShoulder.idx);
         if (!Number.isFinite(atr) || atr <= 0) continue;
 
@@ -71,10 +87,13 @@ function findHS(candles, type, onDiagnostic) {
         if (headProminence < atr * 0.5 || headToNeckline < atr) continue;
 
         const headTime = candles?.[head.idx]?.time ?? head.idx;
+        const leftShoulderTime = candles?.[leftShoulder.idx]?.time;
+        const leftNeckTime = candles?.[leftNeck.idx]?.time;
         const rightShoulderTime = candles?.[rightShoulder.idx]?.time;
+        const rightNeckTime = candles?.[rightNeck.idx]?.time;
         const necklineStartTime = candles?.[leftNeck.idx]?.time;
         const necklineEndTime = candles?.[rightNeck.idx]?.time;
-        if (![headTime, rightShoulderTime, necklineStartTime, necklineEndTime].every(Number.isFinite)) continue;
+        if (![leftShoulderTime, leftNeckTime, headTime, rightNeckTime, rightShoulderTime].every(Number.isFinite)) continue;
 
         const necklineHigh = Math.max(leftNeck.val, rightNeck.val);
         const necklineLow = Math.min(leftNeck.val, rightNeck.val);
@@ -87,7 +106,20 @@ function findHS(candles, type, onDiagnostic) {
             ? rightShoulder.val + slBuffer
             : rightShoulder.val - slBuffer;
 
-        onDiagnostic?.({ type, stage: "geometry" });
+        onDiagnostic?.({
+            type,
+            stage: "geometry",
+            leftShoulderPrice: leftShoulder.val,
+            leftShoulderTime,
+            leftNeckPrice: leftNeck.val,
+            leftNeckTime,
+            headPrice: head.val,
+            headTime,
+            rightNeckPrice: rightNeck.val,
+            rightNeckTime,
+            rightShoulderPrice: rightShoulder.val,
+            rightShoulderTime
+        });
 
         return {
             type,

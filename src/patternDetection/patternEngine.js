@@ -42,12 +42,37 @@ export function runDetection(
             const result = detectPatterns(
                 candleData[tf], // structural candles
                 expectedBias,
-                ({ type, stage }) => {
+                ({
+                    type,
+                    stage,
+                    leftShoulderPrice,
+                    leftShoulderTime,
+                    leftNeckPrice,
+                    leftNeckTime,
+                    headPrice,
+                    headTime,
+                    rightNeckPrice,
+                    rightNeckTime,
+                    rightShoulderPrice,
+                    rightShoulderTime,
+                    invalidationPrice
+                }) => {
                     if (stage === "geometry") {
                         geometryFound = true;
                         console.log(
                             `🔎 [${symbol}] ${tf} ${type.toUpperCase()} geometry matches trend bias; ` +
-                            `calculating the pattern-based stop and target.`
+                            `Pivots oldest→newest: ` +
+                            `LS ${leftShoulderPrice} @ ${new Date(leftShoulderTime).toISOString()} | ` +
+                            `LN ${leftNeckPrice} @ ${new Date(leftNeckTime).toISOString()} | ` +
+                            `Head ${headPrice} @ ${new Date(headTime).toISOString()} | ` +
+                            `RN ${rightNeckPrice} @ ${new Date(rightNeckTime).toISOString()} | ` +
+                            `RS ${rightShoulderPrice} @ ${new Date(rightShoulderTime).toISOString()}.`
+                        );
+                    } else if (stage === "invalidated") {
+                        console.log(
+                            `❌ [${symbol}] ${tf} ${type.toUpperCase()} setup invalidated: ` +
+                            `price ${invalidationPrice} moved ${type === "sell" ? "above" : "below"} ` +
+                            `the head at ${headPrice}.`
                         );
                     }
                 }
