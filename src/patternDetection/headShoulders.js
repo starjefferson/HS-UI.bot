@@ -66,13 +66,15 @@ function findHS(candles, type, onDiagnostic) {
 
         // Allow ordinary market variation, but reject shallow heads, mismatched
         // shoulders, and necklines whose two reactions are materially different.
-        if (shoulderDifference > atr * 1.5) continue;
-        if (necklineDifference > atr * 1.5) continue;
+        if (shoulderDifference > atr * 2) continue;
+        if (necklineDifference > atr * 2) continue;
         if (headProminence < atr * 0.5 || headToNeckline < atr) continue;
 
         const headTime = candles?.[head.idx]?.time ?? head.idx;
         const rightShoulderTime = candles?.[rightShoulder.idx]?.time;
-        if (![headTime, rightShoulderTime].every(Number.isFinite)) continue;
+        const necklineStartTime = candles?.[leftNeck.idx]?.time;
+        const necklineEndTime = candles?.[rightNeck.idx]?.time;
+        if (![headTime, rightShoulderTime, necklineStartTime, necklineEndTime].every(Number.isFinite)) continue;
 
         const necklineHigh = Math.max(leftNeck.val, rightNeck.val);
         const necklineLow = Math.min(leftNeck.val, rightNeck.val);
@@ -95,7 +97,11 @@ function findHS(candles, type, onDiagnostic) {
             measuredMove,
             sl: slPrice,
             headTime,
-            rightShoulderTime
+            rightShoulderTime,
+            necklineStartTime,
+            necklineStartPrice: leftNeck.val,
+            necklineEndTime,
+            necklineEndPrice: rightNeck.val
         };
     }
 

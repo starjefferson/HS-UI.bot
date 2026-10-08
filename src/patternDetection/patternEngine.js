@@ -120,18 +120,15 @@ export function runDetection(
         return null;
     }
 
-    const breakoutBoundary = structuralSetup.type === "sell"
-        ? structuralSetup.necklineLow
-        : structuralSetup.necklineHigh;
-    const breakoutLevel = structuralSetup.type === "sell"
-        ? breakoutBoundary - breakoutBuffer
-        : breakoutBoundary + breakoutBuffer;
-
     const previousBreakout = closedH1Candles
-        .slice(2)
+        .slice(1)
         .find(candle =>
             candle.time >= structuralSetup.rightShoulderTime &&
-            isBeyondNeckline(candle.close, breakoutLevel, structuralSetup.type)
+            isBeyondNeckline(
+                candle.close,
+                getBreakoutLevel(structuralSetup, candle.time + oneHourMs, breakoutBuffer),
+                structuralSetup.type
+            )
         );
     if (previousBreakout) {
         console.log(
@@ -142,16 +139,27 @@ export function runDetection(
         return null;
     }
 
+    const previousBreakoutLevel = getBreakoutLevel(
+        structuralSetup,
+        previousClosedH1.time + oneHourMs,
+        breakoutBuffer
+    );
+    const breakoutLevel = getBreakoutLevel(
+        structuralSetup,
+        lastClosedH1.time + oneHourMs,
+        breakoutBuffer
+    );
     const breakoutConfirmed = checkH1NecklineBreakout(
         previousClosedH1.close,
         lastClosedH1.close,
+        previousBreakoutLevel,
         breakoutLevel,
         structuralSetup.type
     );
     if (!breakoutConfirmed) {
         console.log(
-            `⏳ [${symbol}] Waiting: no fresh 1H close cleared the neckline region by ${breakoutBuffer} ` +
-            `[${structuralSetup.necklineLow}, ${structuralSetup.necklineHigh}] | ` +
+            `⏳ [${symbol}] Waiting: no fresh 1H close cleared the sloped neckline by ${breakoutBuffer} ` +
+            `| Previous threshold: ${previousBreakoutLevel} | Latest threshold: ${breakoutLevel} | ` +
             `Previous close: ${previousClosedH1.close} | Latest close: ${lastClosedH1.close}.`
         );
         reportPatternState("waiting-breakout");
@@ -159,9 +167,13 @@ export function runDetection(
     }
 
     const entryPrice = lastClosedH1.close;
+    const necklineAtBreakout = getNecklineAtTime(
+        structuralSetup,
+        lastClosedH1.time + oneHourMs
+    );
     const tp = structuralSetup.type === "sell"
-        ? structuralSetup.necklineLow - structuralSetup.measuredMove
-        : structuralSetup.necklineHigh + structuralSetup.measuredMove;
+        ? necklineAtBreakout - structuralSetup.measuredMove
+        : necklineAtBreakout + structuralSetup.measuredMove;
     const risk = structuralSetup.type === "sell"
         ? structuralSetup.sl - entryPrice
         : entryPrice - structuralSetup.sl;
@@ -191,7 +203,7 @@ export function runDetection(
     // ── 6. Build final setup ──────────────────────────────────────────────────
     reportPatternState("breakout-confirmed");
     console.log(
-        `✅ [${symbol}] First 1H close beyond neckline region by ${breakoutBuffer} — Structure: ${activeTFs.join(" + ")} | ` +
+        `✅ [${symbol}] First 1H close beyond sloped neckline by ${breakoutBuffer} — Structure: ${activeTFs.join(" + ")} | ` +
         `Entry: ${entryPrice} | SL: ${structuralSetup.sl} | TP: ${tp} | RR: ${rr.toFixed(2)}`
     );
 
@@ -218,15 +230,31 @@ export function runDetection(
 /**
  * A breakout requires a candle close beyond the far edge of the neckline region.
  */
-function checkH1NecklineBreakout(previousClose, latestClose, boundary, type) {
+function checkH1NecklineBreakout(previousClose, latestClose, previousBoundary, latestBoundary, type) {
     if (type === "sell") {
-        return previousClose >= boundary && latestClose < boundary;
+        return previousClose >= previousBoundary && latestClose < latestBoundary;
     }
-    return previousClose <= boundary && latestClose > boundary;
+    return previousClose <= previousBoundary && latestClose > latestBoundary;
 }
 
 function isBeyondNeckline(close, boundary, type) {
     return type === "sell" ? close < boundary : close > boundary;
+}
+
+function getBreakoutLevel(setup, time, breakoutBuffer) {
+    const neckline = getNecklineAtTime(setup, time);
+    return setup.type === "sell"
+        ? neckline - breakoutBuffer
+        : neckline + breakoutBuffer;
+}
+
+function getNecklineAtTime(setup, time) {
+    const elapsed = setup.necklineEndTime - setup.necklineStartTime;
+    if (!(elapsed > 0)) return setup.necklineEndPrice;
+
+    const progress = (time - setup.necklineStartTime) / elapsed;
+    return setup.necklineStartPrice +
+        (setup.necklineEndPrice - setup.necklineStartPrice) * progress;
 }
 
 function getPipSize(symbol) {
