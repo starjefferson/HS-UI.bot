@@ -100,7 +100,7 @@ async function runTradingCycle() {
       const currentPrice = h1[0].close;
 
       if (bias === "none") {
-        console.log(`ℹ️ [${symbol}] No valid Head & Shoulders pattern detected.`);
+        console.log(`ℹ️ [${symbol}] Scan skipped: W1/D1/H4/H1 trend bias is not aligned.`);
         continue;
       }
 
@@ -114,7 +114,7 @@ async function runTradingCycle() {
       });
 
       if (!patternDetected) {
-        console.log(`ℹ️ [${symbol}] No valid Head & Shoulders pattern detected.`);
+        console.log(`ℹ️ [${symbol}] No tradable setup found; review the pattern-stage diagnostics above.`);
       }
 
       if (!pattern) {

@@ -24,11 +24,28 @@ export function runDetection(candleData, symbol, expectedBias, onPatternDetected
 
     for (const tf of structuralTFs) {
         if (candleData[tf] && candleData[tf].length >= 200) {
+            let geometryFound = false;
             const result = detectPatterns(
-                candleData[tf] // structural candles
+                candleData[tf], // structural candles
+                ({ type, stage }) => {
+                    if (stage === "geometry") {
+                        geometryFound = true;
+                        console.log(
+                            `🔎 [${symbol}] ${tf} ${type.toUpperCase()} pattern geometry confirmed; ` +
+                            `evaluating historical TP/RR.`
+                        );
+                    } else if (stage === "tp-rejected") {
+                        console.log(
+                            `❌ [${symbol}] ${tf} ${type.toUpperCase()} geometry rejected: ` +
+                            `invalid risk distance or historical S/R target below the 2.5R minimum.`
+                        );
+                    }
+                }
             );
             if (result) {
                 detectedSetups[tf] = result;
+            } else if (!geometryFound) {
+                console.log(`ℹ️ [${symbol}] No geometrically valid H&S pattern found on ${tf}.`);
             }
         }
     }

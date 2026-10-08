@@ -12,17 +12,18 @@
  * Detects H&S / Inverted H&S patterns on the supplied candle array.
  *
  * @param {Array}  candles - Structural candles (4H or 1D timeframe)
+ * @param {Function} [onDiagnostic] - Reports geometry and TP/RR evaluation stages
  * @returns {Object|null}
  */
-export function detectPatterns(candles) {
+export function detectPatterns(candles, onDiagnostic) {
     if (!candles || candles.length < 200) return null;
 
     // Scan for Sell (Head and Shoulders)
-    const hs = findHS(candles, "sell");
+    const hs = findHS(candles, "sell", onDiagnostic);
     if (hs) return hs;
 
     // Scan for Buy (Inverted Head and Shoulders)
-    const ihs = findHS(candles, "buy");
+    const ihs = findHS(candles, "buy", onDiagnostic);
     if (ihs) return ihs;
 
     return null;
@@ -35,9 +36,10 @@ export function detectPatterns(candles) {
  *
  * @param {Array}    candles         - Structural candles (4H or 1D)
  * @param {"sell"|"buy"} type
+ * @param {Function} [onDiagnostic]
  * @returns {Object|null}
  */
-function findHS(candles, type) {
+function findHS(candles, type, onDiagnostic) {
     const mainData    = type === "sell" ? candles.map(c => c.high) : candles.map(c => c.low);
     const supportData = type === "sell" ? candles.map(c => c.low)  : candles.map(c => c.high);
 
@@ -80,9 +82,14 @@ function findHS(candles, type) {
         const slPrice    = s2.val + (s2.val > 50 ? jpyBuffer : pipBuffer);
         const entryPrice = nLow; // Neckline breakout level
 
+        onDiagnostic?.({ type, stage: "geometry" });
+
         // ── TP Calculation ────────────────────────────────────────────────────
         const tpResult = calculateHistoricalTP(candles, entryPrice, slPrice, "sell");
-        if (!tpResult) return null; // Rejected if key support too close (RR < 2.5)
+        if (!tpResult) {
+            onDiagnostic?.({ type, stage: "tp-rejected" });
+            return null; // Rejected if key support too close (RR < 2.5)
+        }
 
         return {
             type: "sell",
@@ -107,9 +114,14 @@ function findHS(candles, type) {
         const slPrice    = s2.val - (s2.val > 50 ? jpyBuffer : pipBuffer);
         const entryPrice = nHigh; // Neckline breakout level
 
+        onDiagnostic?.({ type, stage: "geometry" });
+
         // ── TP Calculation ────────────────────────────────────────────────────
         const tpResult = calculateHistoricalTP(candles, entryPrice, slPrice, "buy");
-        if (!tpResult) return null; // Rejected if key resistance too close (RR < 2.5)
+        if (!tpResult) {
+            onDiagnostic?.({ type, stage: "tp-rejected" });
+            return null; // Rejected if key resistance too close (RR < 2.5)
+        }
 
         return {
             type: "buy",
