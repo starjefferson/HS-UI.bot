@@ -55,12 +55,13 @@ export function runDetection(
                     rightNeckTime,
                     rightShoulderPrice,
                     rightShoulderTime,
-                    invalidationPrice
+                    invalidationPrice,
+                    invalidationTime
                 }) => {
                     if (stage === "geometry") {
                         geometryFound = true;
                         console.log(
-                            `🔎 [${symbol}] ${tf} ${type.toUpperCase()} geometry matches trend bias; ` +
+                            `🔎 [${symbol}] ${tf} ${type.toUpperCase()} geometry candidate; ` +
                             `Pivots oldest→newest: ` +
                             `LS ${leftShoulderPrice} @ ${new Date(leftShoulderTime).toISOString()} | ` +
                             `LN ${leftNeckPrice} @ ${new Date(leftNeckTime).toISOString()} | ` +
@@ -72,7 +73,8 @@ export function runDetection(
                         console.log(
                             `❌ [${symbol}] ${tf} ${type.toUpperCase()} setup invalidated: ` +
                             `price ${invalidationPrice} moved ${type === "sell" ? "above" : "below"} ` +
-                            `the head at ${headPrice}.`
+                            `the head at ${headPrice} on ${new Date(invalidationTime).toISOString()}. ` +
+                            `Older structures will not be considered.`
                         );
                     }
                 }

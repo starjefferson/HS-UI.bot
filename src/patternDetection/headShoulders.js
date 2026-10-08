@@ -52,22 +52,6 @@ function findHS(candles, type, onDiagnostic) {
         if (gaps.some(gap => gap < 3 || gap > 60)) continue;
         if (leftShoulder.idx - rightShoulder.idx > 120) continue;
 
-        const invalidationCandle = candles
-            .slice(0, rightShoulder.idx)
-            .find(candle => type === "sell"
-                ? candle.high > head.val
-                : candle.low < head.val);
-        if (invalidationCandle) {
-            onDiagnostic?.({
-                type,
-                stage: "invalidated",
-                headPrice: head.val,
-                invalidationPrice: type === "sell" ? invalidationCandle.high : invalidationCandle.low,
-                invalidationTime: invalidationCandle.time
-            });
-            continue;
-        }
-
         const atr = calculatePatternATR(candles, rightShoulder.idx, leftShoulder.idx);
         if (!Number.isFinite(atr) || atr <= 0) continue;
 
@@ -120,6 +104,22 @@ function findHS(candles, type, onDiagnostic) {
             rightShoulderPrice: rightShoulder.val,
             rightShoulderTime
         });
+
+        const invalidationCandle = candles
+            .slice(0, rightShoulder.idx)
+            .find(candle => type === "sell"
+                ? candle.high > head.val
+                : candle.low < head.val);
+        if (invalidationCandle) {
+            onDiagnostic?.({
+                type,
+                stage: "invalidated",
+                headPrice: head.val,
+                invalidationPrice: type === "sell" ? invalidationCandle.high : invalidationCandle.low,
+                invalidationTime: invalidationCandle.time
+            });
+            return null;
+        }
 
         return {
             type,
