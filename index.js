@@ -132,18 +132,28 @@ async function runTradingCycle() {
       // Stage 3: Pattern detection; the callback also reports valid structures
       // that are still waiting for their 1H breakout.
       let patternDetected = false;
-      const pattern = runDetection(candleData, symbol, bias, ({ type, activeTFs, stage }) => {
+      const pattern = runDetection(candleData, symbol, bias, ({ type, activeTFs, structuralTF, stage }) => {
         patternDetected = true;
         if (stage === "waiting-breakout" || stage === "waiting-data") {
-          console.log(`✅ [${symbol}] H&S Pattern Detected: [${type.toUpperCase()}/${activeTFs.join("+")}]`);
+          console.log(
+            `✅ [${symbol}] H&S Pattern Detected: ${type.toUpperCase()} | ` +
+            `Entry/SL/TP levels: ${structuralTF} | Detected structures: ${activeTFs.join("+")}`
+          );
           finalStatus = `⏳ [${symbol}] Pending: Waiting for neckline break`;
         } else if (stage === "breakout-missed") {
-          console.log(`ℹ️ [${symbol}] Pattern [${type.toUpperCase()}/${activeTFs.join("+")}] breakout already occurred; re-entry disabled.`);
+          console.log(
+            `ℹ️ [${symbol}] ${type.toUpperCase()} pattern breakout already occurred; ` +
+            `entry/SL/TP source was ${structuralTF}; detected structures: ${activeTFs.join("+")}. ` +
+            `Re-entry disabled.`
+          );
           finalStatus = `⏭️ [${symbol}] Status: Scan complete (Breakout missed; no re-entry)`;
         } else if (stage === "breakout-history-insufficient") {
           finalStatus = `⏭️ [${symbol}] Status: Scan complete (Breakout history unavailable; no entry)`;
         } else if (stage === "breakout-confirmed") {
-          console.log(`✅ [${symbol}] H&S Pattern Detected: [${type.toUpperCase()}/${activeTFs.join("+")}]`);
+          console.log(
+            `✅ [${symbol}] ${type.toUpperCase()} pattern breakout confirmed; ` +
+            `entry/SL/TP source: ${structuralTF}; detected structures: ${activeTFs.join("+")}.`
+          );
           finalStatus = `⏭️ [${symbol}] Status: Scan complete (No valid setup)`;
         } else if (stage === "invalid-levels") {
           finalStatus = `⏭️ [${symbol}] Status: Scan complete (Invalid trade levels)`;

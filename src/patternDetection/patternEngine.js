@@ -1,5 +1,9 @@
 import { detectPatterns } from "./headShoulders.js";
 
+const trackedStructures = new Map();
+const STRUCTURE_MAX_AGE_CANDLES = 24;
+const TIMEFRAME_MILLISECONDS = { "4H": 4 * 60 * 60 * 1000, "1D": 24 * 60 * 60 * 1000 };
+
 /**
  * Enhanced Detection Hub
  *
@@ -37,84 +41,195 @@ export function runDetection(
     let detectedSetups  = {};
 
     for (const tf of structuralTFs) {
-        if (candleData[tf] && candleData[tf].length >= 200) {
-            let geometryFound = false;
-            const result = detectPatterns(
-                candleData[tf], // structural candles
-                expectedBias,
-                ({
-                    type,
-                    stage,
-                    leftShoulderPrice,
-                    leftShoulderTime,
-                    leftNeckPrice,
-                    leftNeckTime,
-                    headPrice,
-                    headTime,
-                    rightNeckPrice,
-                    rightNeckTime,
-                    rightShoulderPrice,
-                    rightShoulderTime,
-                    invalidationPrice,
-                    invalidationTime,
-                    ageCandles,
-                    maxAgeCandles
-                }) => {
-                    if (stage === "geometry") {
-                        geometryFound = true;
-                        console.log(
-                            `🔎 [${symbol}] ${tf} ${type.toUpperCase()} geometry candidate; ` +
-                            `Pivots oldest→newest: ` +
-                            `LS ${leftShoulderPrice} @ ${new Date(leftShoulderTime).toISOString()} | ` +
-                            `LN ${leftNeckPrice} @ ${new Date(leftNeckTime).toISOString()} | ` +
-                            `Head ${headPrice} @ ${new Date(headTime).toISOString()} | ` +
-                            `RN ${rightNeckPrice} @ ${new Date(rightNeckTime).toISOString()} | ` +
-                            `RS ${rightShoulderPrice} @ ${new Date(rightShoulderTime).toISOString()}.`
-                        );
-                    } else if (stage === "invalidated") {
-                        console.log(
-                            `❌ [${symbol}] ${tf} ${type.toUpperCase()} setup invalidated: ` +
-                            `price ${invalidationPrice} moved ${type === "sell" ? "above" : "below"} ` +
-                            `the head at ${headPrice} on ${new Date(invalidationTime).toISOString()}. ` +
-                            `Older structures will not be considered.`
-                        );
-                    } else if (stage === "stale") {
-                        console.log(
-                            `⌛ [${symbol}] ${tf} ${type.toUpperCase()} structure expired: ` +
-                            `right shoulder is ${ageCandles} candles old (maximum ${maxAgeCandles}). ` +
-                            `Older structures will not be considered.`
-                        );
-                    }
-                }
+        const candles = candleData[tf];
+        if (!candles || candles.length < 200) {
+            console.log(
+                `⚠️ [${symbol}] ${tf} structure scan skipped: ` +
+                `${candles?.length ?? 0} candles available; 200 required.`
             );
-            if (result) {
-                detectedSetups[tf] = result;
-            } else if (!geometryFound) {
-                console.log(
-                    `ℹ️ [${symbol}] No ${expectedBias.toUpperCase()} H&S geometry found on ${tf}; ` +
-                    `opposite-bias patterns are ignored.`
-                );
+            continue;
+        }
+
+        console.log(`[${symbol}] Scanning ${tf} candles for ${expectedBias.toUpperCase()} H&S structure.`);
+        let geometryFound = false;
+        let geometryCandidate = null;
+        let terminalCandidate = null;
+        const result = detectPatterns(
+            candles,
+            expectedBias,
+            ({
+                type,
+                stage,
+                leftShoulderPrice,
+                leftShoulderTime,
+                leftNeckPrice,
+                leftNeckTime,
+                headPrice,
+                headTime,
+                rightNeckPrice,
+                rightNeckTime,
+                rightShoulderPrice,
+                rightShoulderTime,
+                invalidationPrice,
+                invalidationTime,
+                ageCandles,
+                maxAgeCandles
+            }) => {
+                if (stage === "geometry") {
+                    geometryFound = true;
+                    geometryCandidate = {
+                        headTime,
+                        rightShoulderTime,
+                        headPrice,
+                        type
+                    };
+                    console.log(
+                        `🔎 [${symbol}] ${tf} ${type.toUpperCase()} geometry candidate; ` +
+                        `Pivots oldest→newest (times UTC): ` +
+                        `LS ${leftShoulderPrice} @ ${new Date(leftShoulderTime).toISOString()} | ` +
+                        `LN ${leftNeckPrice} @ ${new Date(leftNeckTime).toISOString()} | ` +
+                        `Head ${headPrice} @ ${new Date(headTime).toISOString()} | ` +
+                        `RN ${rightNeckPrice} @ ${new Date(rightNeckTime).toISOString()} | ` +
+                        `RS ${rightShoulderPrice} @ ${new Date(rightShoulderTime).toISOString()}.`
+                    );
+                } else if (stage === "invalidated") {
+                    terminalCandidate = {
+                        headTime,
+                        rightShoulderTime,
+                        stage
+                    };
+                    console.log(
+                        `❌ [${symbol}] ${tf} ${type.toUpperCase()} setup invalidated: ` +
+                        `price ${invalidationPrice} moved ${type === "sell" ? "above" : "below"} ` +
+                        `the head at ${headPrice} on ${new Date(invalidationTime).toISOString()}. ` +
+                        `Older structures will not be considered.`
+                    );
+                } else if (stage === "stale") {
+                    terminalCandidate = {
+                        headTime,
+                        rightShoulderTime,
+                        stage
+                    };
+                    console.log(
+                        `⌛ [${symbol}] ${tf} ${type.toUpperCase()} structure expired: ` +
+                        `right shoulder is ${ageCandles} ${tf} candles old ` +
+                        `(maximum ${maxAgeCandles} ${tf} candles). Older structures will not be considered.`
+                    );
+                }
             }
+        );
+        const trackingKey = `${symbol}:${tf}`;
+        const tracked = trackedStructures.get(trackingKey);
+        let selected = tracked;
+
+        if (geometryCandidate && (!tracked || geometryCandidate.headTime > tracked.headTime)) {
+            if (result) {
+                if (tracked) {
+                    console.log(
+                        `[${symbol}] ${tf} replacing monitored ${tracked.type.toUpperCase()} structure ` +
+                        `(${new Date(tracked.headTime).toISOString()}) with newer ` +
+                        `${result.type.toUpperCase()} structure (${new Date(result.headTime).toISOString()}).`
+                    );
+                } else {
+                    console.log(
+                        `[${symbol}] ${tf} locking ${result.type.toUpperCase()} structure ` +
+                        `${new Date(result.headTime).toISOString()} for monitoring.`
+                    );
+                }
+                trackedStructures.set(trackingKey, result);
+                selected = result;
+            } else {
+                trackedStructures.delete(trackingKey);
+                selected = null;
+            }
+        } else if (
+            tracked &&
+            terminalCandidate?.headTime === tracked.headTime
+        ) {
+            trackedStructures.delete(trackingKey);
+            selected = null;
+        } else if (result && tracked?.headTime === result.headTime) {
+            selected = tracked;
+        } else if (!tracked && result) {
+            trackedStructures.set(trackingKey, result);
+            selected = result;
+            console.log(
+                `[${symbol}] ${tf} locking ${result.type.toUpperCase()} structure ` +
+                `${new Date(result.headTime).toISOString()} for monitoring.`
+            );
+        }
+
+        if (selected) {
+            const ageCandles = Math.floor(
+                Math.max(0, candles[0].time - selected.rightShoulderTime) /
+                TIMEFRAME_MILLISECONDS[tf]
+            );
+            const invalidationCandle = candles.find(candle =>
+                candle.time > selected.rightShoulderTime &&
+                (selected.type === "sell"
+                    ? candle.high > selected.headPrice
+                    : candle.low < selected.headPrice)
+            );
+            if (ageCandles > STRUCTURE_MAX_AGE_CANDLES) {
+                console.log(
+                    `⌛ [${symbol}] ${tf} monitored structure expired: right shoulder is ` +
+                    `${ageCandles} ${tf} candles old (maximum ${STRUCTURE_MAX_AGE_CANDLES}).`
+                );
+                trackedStructures.delete(trackingKey);
+                selected = null;
+            } else if (invalidationCandle) {
+                console.log(
+                    `❌ [${symbol}] ${tf} monitored structure invalidated: price ` +
+                    `${selected.type === "sell" ? invalidationCandle.high : invalidationCandle.low} ` +
+                    `crossed the head ${selected.type === "sell" ? "above" : "below"} ` +
+                    `${selected.headPrice} on ${new Date(invalidationCandle.time).toISOString()}.`
+                );
+                trackedStructures.delete(trackingKey);
+                selected = null;
+            }
+        }
+
+        if (selected) {
+            detectedSetups[tf] = selected;
+            console.log(
+                `✅ [${symbol}] ${tf} ${selected.type.toUpperCase()} monitored structure: ` +
+                `head ${selected.headTime}; neckline ${selected.necklineStartPrice} → ` +
+                `${selected.necklineEndPrice}; stop ${selected.sl}; measured move ${selected.measuredMove}.`
+            );
+        } else if (!geometryFound) {
+            console.log(
+                `ℹ️ [${symbol}] No ${expectedBias.toUpperCase()} H&S geometry found on ${tf}; ` +
+                `opposite-bias patterns are ignored.`
+            );
         }
     }
 
-    // ── 2. Require at least one structural setup on 4H or 1D ─────────────────
-    const primaryPattern = detectedSetups["4H"] || detectedSetups["1D"];
-    if (!primaryPattern) return null;
+    const acceptedTFs = Object.keys(detectedSetups);
+    if (acceptedTFs.length === 0) {
+        console.log(`[${symbol}] No accepted structural setup; no entry or stop levels will be used.`);
+        return null;
+    }
 
     // ── 3. Multi-TF alignment: if both 4H and 1D detected, they must agree ───
     if (detectedSetups["4H"] && detectedSetups["1D"]) {
         if (detectedSetups["4H"].type !== detectedSetups["1D"].type) {
             console.log(
                 `❌ [${symbol}] Multi-TF conflict: 4H is "${detectedSetups["4H"].type}" ` +
-                `but 1D is "${detectedSetups["1D"].type}". Setup rejected.`
+                `but 1D is "${detectedSetups["1D"].type}". Setup rejected; no levels will be used.`
             );
             return null;
         }
     }
 
-    // Use 4H when available (more precise SL/TP), fall back to 1D
-    const structuralSetup = detectedSetups["4H"] || detectedSetups["1D"];
+    // The smaller structural timeframe owns levels whenever both are accepted.
+    const structuralTF = detectedSetups["4H"] ? "4H" : "1D";
+    const structuralSetup = detectedSetups[structuralTF];
+    console.log(
+        `[${symbol}] Selected ${structuralTF} ${structuralSetup.type.toUpperCase()} structure for entry/SL/TP levels` +
+        `${acceptedTFs.length > 1 ? `; 1D is context only, 4H levels take precedence` : ""}. ` +
+        `Neckline ${structuralSetup.necklineStartPrice} → ${structuralSetup.necklineEndPrice}; ` +
+        `SL ${structuralSetup.sl}; measured move ${structuralSetup.measuredMove}.`
+    );
 
     if (expectedBias && structuralSetup.type !== expectedBias) {
         console.log(
@@ -128,6 +243,7 @@ export function runDetection(
     const reportPatternState = (stage) => onPatternDetected?.({
         type: structuralSetup.type,
         activeTFs,
+        structuralTF,
         stage
     });
 
@@ -157,18 +273,30 @@ export function runDetection(
 
     const previousBreakout = closedH1Candles
         .slice(1)
-        .find(candle =>
-            candle.time >= structuralSetup.rightShoulderTime &&
-            isBeyondNeckline(
-                candle.close,
-                getBreakoutLevel(structuralSetup, candle.time + oneHourMs, breakoutBuffer),
-                structuralSetup.type
-            )
-        );
+        .find(candle => {
+            if (candle.time < structuralSetup.rightShoulderTime) return false;
+            const threshold = getBreakoutLevel(
+                structuralSetup,
+                candle.time + oneHourMs,
+                breakoutBuffer
+            );
+            return isBeyondNeckline(candle.close, threshold, structuralSetup.type);
+        });
     if (previousBreakout) {
+        const breakoutCheckTime = previousBreakout.time + oneHourMs;
+        const breakoutNeckline = getNecklineAtTime(structuralSetup, breakoutCheckTime);
+        const breakoutThreshold = getBreakoutLevel(
+            structuralSetup,
+            breakoutCheckTime,
+            breakoutBuffer
+        );
         console.log(
-            `⏭️ [${symbol}] No re-entry: neckline region was already broken by a closed 1H candle ` +
-            `at ${new Date(previousBreakout.time).toISOString()}.`
+            `⏭️ [${symbol}] No late entry: ${structuralTF} ${structuralSetup.type.toUpperCase()} ` +
+            `setup head ${new Date(structuralSetup.headTime).toISOString()} had a prior 1H close beyond ` +
+            `its projected neckline | Candle: ${new Date(previousBreakout.time).toISOString()} ` +
+            `close ${previousBreakout.close} | Neckline ${breakoutNeckline} | ` +
+            `${structuralSetup.type.toUpperCase()} threshold ${breakoutThreshold} ` +
+            `(buffer ${breakoutBuffer}).`
         );
         reportPatternState("breakout-missed");
         return null;
@@ -239,16 +367,18 @@ export function runDetection(
     reportPatternState("breakout-confirmed");
     console.log(
         `✅ [${symbol}] First 1H close beyond sloped neckline by ${breakoutBuffer} — Structure: ${activeTFs.join(" + ")} | ` +
-        `Entry: ${entryPrice} | SL: ${structuralSetup.sl} | TP: ${tp} | RR: ${rr.toFixed(2)}`
+        `Entry/SL/TP source: ${structuralTF} | Entry: ${entryPrice} | ` +
+        `SL: ${structuralSetup.sl} | TP: ${tp} | RR: ${rr.toFixed(2)}`
     );
 
     return {
         type:         structuralSetup.type,
-        label:        `${structuralSetup.label} (${activeTFs.join("+")} / 1H trigger)`,
+        label:        `${structuralSetup.label} (${structuralTF} levels / 1H trigger)`,
         pair:         symbol,
         sl:           structuralSetup.sl,
         tp,
         entryPrice,
+        structuralTF,
         breakoutNeckline: breakoutLevel,
         targetRR:     rr,
         necklineHigh: structuralSetup.necklineHigh,

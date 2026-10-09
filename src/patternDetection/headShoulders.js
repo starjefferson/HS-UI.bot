@@ -119,6 +119,8 @@ function findHS(candles, type, onDiagnostic) {
                 type,
                 stage: "invalidated",
                 headPrice: head.val,
+                headTime,
+                rightShoulderTime,
                 invalidationPrice: type === "sell" ? invalidationCandle.high : invalidationCandle.low,
                 invalidationTime: invalidationCandle.time
             });
