@@ -23,6 +23,7 @@ export function detectPatterns(candles, expectedType, onDiagnostic) {
 }
 
 // ─── Internal Pattern Finder ─────────────────────────────────────────────────
+const MAX_PATTERN_AGE_CANDLES = 24;
 
 /**
  * Core H&S / Inverted H&S structural finder.
@@ -90,9 +91,7 @@ function findHS(candles, type, onDiagnostic) {
             ? rightShoulder.val + slBuffer
             : rightShoulder.val - slBuffer;
 
-        onDiagnostic?.({
-            type,
-            stage: "geometry",
+        const pivotDetails = {
             leftShoulderPrice: leftShoulder.val,
             leftShoulderTime,
             leftNeckPrice: leftNeck.val,
@@ -103,6 +102,11 @@ function findHS(candles, type, onDiagnostic) {
             rightNeckTime,
             rightShoulderPrice: rightShoulder.val,
             rightShoulderTime
+        };
+        onDiagnostic?.({
+            type,
+            stage: "geometry",
+            ...pivotDetails
         });
 
         const invalidationCandle = candles
@@ -117,6 +121,17 @@ function findHS(candles, type, onDiagnostic) {
                 headPrice: head.val,
                 invalidationPrice: type === "sell" ? invalidationCandle.high : invalidationCandle.low,
                 invalidationTime: invalidationCandle.time
+            });
+            return null;
+        }
+
+        if (rightShoulder.idx > MAX_PATTERN_AGE_CANDLES) {
+            onDiagnostic?.({
+                type,
+                stage: "stale",
+                ageCandles: rightShoulder.idx,
+                maxAgeCandles: MAX_PATTERN_AGE_CANDLES,
+                ...pivotDetails
             });
             return null;
         }

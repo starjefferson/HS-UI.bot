@@ -56,7 +56,9 @@ export function runDetection(
                     rightShoulderPrice,
                     rightShoulderTime,
                     invalidationPrice,
-                    invalidationTime
+                    invalidationTime,
+                    ageCandles,
+                    maxAgeCandles
                 }) => {
                     if (stage === "geometry") {
                         geometryFound = true;
@@ -74,6 +76,12 @@ export function runDetection(
                             `❌ [${symbol}] ${tf} ${type.toUpperCase()} setup invalidated: ` +
                             `price ${invalidationPrice} moved ${type === "sell" ? "above" : "below"} ` +
                             `the head at ${headPrice} on ${new Date(invalidationTime).toISOString()}. ` +
+                            `Older structures will not be considered.`
+                        );
+                    } else if (stage === "stale") {
+                        console.log(
+                            `⌛ [${symbol}] ${tf} ${type.toUpperCase()} structure expired: ` +
+                            `right shoulder is ${ageCandles} candles old (maximum ${maxAgeCandles}). ` +
                             `Older structures will not be considered.`
                         );
                     }
@@ -166,16 +174,12 @@ export function runDetection(
         return null;
     }
 
-    const previousBreakoutLevel = getBreakoutLevel(
-        structuralSetup,
-        previousClosedH1.time + oneHourMs,
-        breakoutBuffer
-    );
-    const breakoutLevel = getBreakoutLevel(
-        structuralSetup,
-        lastClosedH1.time + oneHourMs,
-        breakoutBuffer
-    );
+    const previousCheckTime = previousClosedH1.time + oneHourMs;
+    const latestCheckTime = lastClosedH1.time + oneHourMs;
+    const previousNeckline = getNecklineAtTime(structuralSetup, previousCheckTime);
+    const latestNeckline = getNecklineAtTime(structuralSetup, latestCheckTime);
+    const previousBreakoutLevel = getBreakoutLevel(structuralSetup, previousCheckTime, breakoutBuffer);
+    const breakoutLevel = getBreakoutLevel(structuralSetup, latestCheckTime, breakoutBuffer);
     const breakoutConfirmed = checkH1NecklineBreakout(
         previousClosedH1.close,
         lastClosedH1.close,
@@ -186,8 +190,12 @@ export function runDetection(
     if (!breakoutConfirmed) {
         console.log(
             `⏳ [${symbol}] Waiting: no fresh 1H close cleared the sloped neckline by ${breakoutBuffer} ` +
-            `| Previous threshold: ${previousBreakoutLevel} | Latest threshold: ${breakoutLevel} | ` +
-            `Previous close: ${previousClosedH1.close} | Latest close: ${lastClosedH1.close}.`
+            `| Previous 1H check: neckline ${previousNeckline}, ` +
+            `${structuralSetup.type === "sell" ? "SELL" : "BUY"} threshold ${previousBreakoutLevel}, ` +
+            `close ${previousClosedH1.close} | ` +
+            `Latest 1H check: neckline ${latestNeckline}, ` +
+            `${structuralSetup.type === "sell" ? "SELL" : "BUY"} threshold ${breakoutLevel}, ` +
+            `close ${lastClosedH1.close}.`
         );
         reportPatternState("waiting-breakout");
         return null;
