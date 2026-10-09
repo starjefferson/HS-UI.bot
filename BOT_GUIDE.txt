@@ -255,11 +255,11 @@
 
   src/patternDetection/headShoulders.js
     Contains the structural pattern detection algorithm.
-    - Scans the last 250 candles for local price peaks (for H&S) or troughs (for IHS)
-    - Uses a "sliding window" of radius 5 candles to find swing highs/lows
-    - Identifies the Left Shoulder, Head, and Right Shoulder
-    - Calculates neckline levels, Stop Loss (above/below Right Shoulder), and TP
-    - Returns null if no valid pattern is found
+    - Uses a "sliding window" of radius 5 candles to confirm structural pivots
+    - Can provisionally monitor a forming right shoulder after the first four pivots
+    - Updates the provisional right-shoulder level and stop as that pivot extends
+    - Calculates neckline levels and measured-move targets from the detected structure
+    - Entry still requires a closed 1H candle to break the neckline by the configured buffer
 
   src/patternDetection/patternEngine.js
     Orchestrates the detection across timeframes.

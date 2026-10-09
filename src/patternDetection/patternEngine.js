@@ -54,6 +54,15 @@ export function runDetection(
         let geometryFound = false;
         let geometryCandidate = null;
         let terminalCandidate = null;
+        const trackingKey = `${symbol}:${tf}`;
+        const tracked = trackedStructures.get(trackingKey);
+        if (tracked && tracked.type !== expectedBias) {
+            console.log(
+                `[${symbol}] Clearing tracked ${tf} ${tracked.type.toUpperCase()} structure: ` +
+                `current trend bias is ${expectedBias.toUpperCase()}.`
+            );
+            trackedStructures.delete(trackingKey);
+        }
         const result = detectPatterns(
             candles,
             expectedBias,
@@ -70,6 +79,7 @@ export function runDetection(
                 rightNeckTime,
                 rightShoulderPrice,
                 rightShoulderTime,
+                formingRightShoulder,
                 invalidationPrice,
                 invalidationTime,
                 ageCandles,
@@ -90,7 +100,8 @@ export function runDetection(
                         `LN ${leftNeckPrice} @ ${new Date(leftNeckTime).toISOString()} | ` +
                         `Head ${headPrice} @ ${new Date(headTime).toISOString()} | ` +
                         `RN ${rightNeckPrice} @ ${new Date(rightNeckTime).toISOString()} | ` +
-                        `RS ${rightShoulderPrice} @ ${new Date(rightShoulderTime).toISOString()}.`
+                        `RS ${rightShoulderPrice} @ ${new Date(rightShoulderTime).toISOString()}` +
+                        `${formingRightShoulder ? " (forming)" : ""}.`
                     );
                 } else if (stage === "invalidated") {
                     terminalCandidate = {
@@ -118,22 +129,25 @@ export function runDetection(
                 }
             }
         );
-        const trackingKey = `${symbol}:${tf}`;
-        const tracked = trackedStructures.get(trackingKey);
-        let selected = tracked;
+        const currentTracked = trackedStructures.get(trackingKey);
+        let selected = currentTracked;
 
-        if (geometryCandidate && (!tracked || geometryCandidate.headTime > tracked.headTime)) {
+        if (
+            geometryCandidate &&
+            (!currentTracked || geometryCandidate.rightShoulderTime > currentTracked.rightShoulderTime)
+        ) {
             if (result) {
-                if (tracked) {
+                if (currentTracked) {
                     console.log(
-                        `[${symbol}] ${tf} replacing monitored ${tracked.type.toUpperCase()} structure ` +
-                        `(${new Date(tracked.headTime).toISOString()}) with newer ` +
-                        `${result.type.toUpperCase()} structure (${new Date(result.headTime).toISOString()}).`
+                        `[${symbol}] ${tf} replacing monitored ${currentTracked.type.toUpperCase()} structure ` +
+                        `(right shoulder ${new Date(currentTracked.rightShoulderTime).toISOString()}) with newer ` +
+                        `${result.type.toUpperCase()} structure ` +
+                        `(right shoulder ${new Date(result.rightShoulderTime).toISOString()}).`
                     );
                 } else {
                     console.log(
                         `[${symbol}] ${tf} locking ${result.type.toUpperCase()} structure ` +
-                        `${new Date(result.headTime).toISOString()} for monitoring.`
+                        `(right shoulder ${new Date(result.rightShoulderTime).toISOString()}) for monitoring.`
                     );
                 }
                 trackedStructures.set(trackingKey, result);
@@ -143,19 +157,41 @@ export function runDetection(
                 selected = null;
             }
         } else if (
-            tracked &&
-            terminalCandidate?.headTime === tracked.headTime
+            currentTracked &&
+            terminalCandidate?.rightShoulderTime === currentTracked.rightShoulderTime
         ) {
             trackedStructures.delete(trackingKey);
             selected = null;
-        } else if (result && tracked?.headTime === result.headTime) {
-            selected = tracked;
-        } else if (!tracked && result) {
+        } else if (result && currentTracked?.rightShoulderTime === result.rightShoulderTime) {
+            const sameCandidate = currentTracked.headTime === result.headTime &&
+                currentTracked.type === result.type;
+            const formingShoulderExtended = result.formingRightShoulder &&
+                (result.type === "sell"
+                    ? result.rightShoulderPrice > currentTracked.rightShoulderPrice
+                    : result.rightShoulderPrice < currentTracked.rightShoulderPrice);
+            if (sameCandidate && formingShoulderExtended) {
+                trackedStructures.set(trackingKey, result);
+                selected = result;
+                console.log(
+                    `[${symbol}] ${tf} forming right shoulder extended to ${result.rightShoulderPrice}; ` +
+                    `updated provisional stop to ${result.sl}.`
+                );
+            } else if (sameCandidate && currentTracked.formingRightShoulder && !result.formingRightShoulder) {
+                trackedStructures.set(trackingKey, result);
+                selected = result;
+                console.log(
+                    `[${symbol}] ${tf} right shoulder confirmed at ${result.rightShoulderPrice}; ` +
+                    `locked stop ${result.sl}.`
+                );
+            } else {
+                selected = currentTracked;
+            }
+        } else if (!currentTracked && result) {
             trackedStructures.set(trackingKey, result);
             selected = result;
             console.log(
                 `[${symbol}] ${tf} locking ${result.type.toUpperCase()} structure ` +
-                `${new Date(result.headTime).toISOString()} for monitoring.`
+                `(right shoulder ${new Date(result.rightShoulderTime).toISOString()}) for monitoring.`
             );
         }
 
@@ -194,7 +230,8 @@ export function runDetection(
             console.log(
                 `✅ [${symbol}] ${tf} ${selected.type.toUpperCase()} monitored structure: ` +
                 `head ${selected.headTime}; neckline ${selected.necklineStartPrice} → ` +
-                `${selected.necklineEndPrice}; stop ${selected.sl}; measured move ${selected.measuredMove}.`
+                `${selected.necklineEndPrice}; stop ${selected.sl}; measured move ${selected.measuredMove}` +
+                `${selected.formingRightShoulder ? "; right shoulder is forming" : ""}.`
             );
         } else if (!geometryFound) {
             console.log(

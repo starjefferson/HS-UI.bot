@@ -36,17 +36,42 @@ const MAX_PATTERN_AGE_CANDLES = 24;
 function findHS(candles, type, onDiagnostic) {
     const radius = 5;
     const pivots = findAlternatingPivots(candles, radius);
-    if (pivots.length < 5) return null;
+    if (pivots.length < 4) return null;
 
     const expectedPivotTypes = type === "sell"
         ? ["high", "low", "high", "low", "high"]
         : ["low", "high", "low", "high", "low"];
-    const maxCandidates = Math.min(pivots.length - 4, 12);
+    const maxCandidates = Math.min(pivots.length - 3, 12);
 
     // Pivots are ordered newest-to-oldest because candle index 0 is most recent.
     for (let start = 0; start < maxCandidates; start++) {
-        const candidate = pivots.slice(start, start + 5);
-        if (candidate.some((pivot, index) => pivot.type !== expectedPivotTypes[index])) continue;
+        let candidate = pivots.slice(start, start + 5);
+        let formingRightShoulder = false;
+        if (candidate.length < 5 || candidate.some((pivot, index) => pivot.type !== expectedPivotTypes[index])) {
+            const confirmedPivots = pivots.slice(start, start + 4);
+            if (
+                confirmedPivots.length !== 4 ||
+                confirmedPivots.some((pivot, index) => pivot.type !== expectedPivotTypes[index + 1])
+            ) continue;
+
+            const rightNeck = confirmedPivots[0];
+            const developingCandles = candles.slice(0, rightNeck.idx);
+            if (developingCandles.length === 0) continue;
+            const extreme = type === "sell"
+                ? developingCandles.reduce((best, candle, index) =>
+                    candle.high > best.val ? { val: candle.high, idx: index } : best,
+                { val: -Infinity, idx: -1 })
+                : developingCandles.reduce((best, candle, index) =>
+                    candle.low < best.val ? { val: candle.low, idx: index } : best,
+                { val: Infinity, idx: -1 });
+            if (extreme.idx < 0) continue;
+
+            candidate = [
+                { type: expectedPivotTypes[0], val: extreme.val, idx: extreme.idx },
+                ...confirmedPivots
+            ];
+            formingRightShoulder = true;
+        }
 
         const [rightShoulder, rightNeck, head, leftNeck, leftShoulder] = candidate;
         const gaps = candidate.slice(1).map((pivot, index) => pivot.idx - candidate[index].idx);
@@ -106,6 +131,7 @@ function findHS(candles, type, onDiagnostic) {
         onDiagnostic?.({
             type,
             stage: "geometry",
+            formingRightShoulder,
             ...pivotDetails
         });
 
@@ -145,12 +171,15 @@ function findHS(candles, type, onDiagnostic) {
             necklineLow,
             measuredMove,
             sl: slPrice,
+            headPrice: head.val,
             headTime,
+            rightShoulderPrice: rightShoulder.val,
             rightShoulderTime,
             necklineStartTime,
             necklineStartPrice: leftNeck.val,
             necklineEndTime,
-            necklineEndPrice: rightNeck.val
+            necklineEndPrice: rightNeck.val,
+            formingRightShoulder
         };
     }
 
