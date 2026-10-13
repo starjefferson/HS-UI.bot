@@ -7,6 +7,7 @@ import { runDetection } from "./src/patternDetection/patternEngine.js";
 import * as goldGuard from "./src/risk/goldGuard.js";
 import { canExecuteCorrelatedTrade } from "./src/risk/correlationGuard.js";
 import { logTradeOpen } from "./src/utils/historyLogger.js";
+import { getFormattedSymbols } from "./src/utils/symbolHelper.js";
 import { config } from "./config.js";
 
 
@@ -19,7 +20,7 @@ if (fs.existsSync(path.join(__dirname, ".env.local"))) {
   dotenv.config();
 }
 
-const PAIRS = [
+const BASE_PAIRS = [
   // Forex Majors (7) — deep liquidity, clean H&S structure
   "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
   // Precious Metals (1)
@@ -27,6 +28,7 @@ const PAIRS = [
   // Best FX Crosses (4) — high liquidity, reliable MetaApi data
   "EURGBP", "EURJPY", "GBPJPY", "AUDJPY",
 ];
+const PAIRS = getFormattedSymbols(BASE_PAIRS);
 
 const HISTORY_PATH = "./history.json";
 const RISK_PERCENT = Number(process.env.RISK_PERCENT ?? config.riskPercent);
@@ -90,16 +92,17 @@ async function runTradingCycle() {
   // Degrades gracefully to [] on error — guard will pass all trades through.
   const openPositions = await getOpenPositions();
 
-  for (const symbol of PAIRS) {
+  for (const [pairIndex, brokerSymbol] of PAIRS.entries()) {
+    const symbol = BASE_PAIRS[pairIndex];
     let finalStatus = `⏭️ [${symbol}] Status: Scan complete (No valid setup)`;
     try {
       // Stage 1: Fetch historical candles for all scan timeframes.
       console.log(`📥 [${symbol}] Fetching candles: W1, D1, H4, H1...`);
       await ensureMetaApiConnection();
-      const w1 = await getCandles(symbol, "1W", 50);
-      const d1 = await getCandles(symbol, "1D", 200);
-      const h4 = await getCandles(symbol, "4H", 200);
-      const h1 = await getCandles(symbol, "1H", 200);
+      const w1 = await getCandles(brokerSymbol, "1W", 50);
+      const d1 = await getCandles(brokerSymbol, "1D", 200);
+      const h4 = await getCandles(brokerSymbol, "4H", 200);
+      const h1 = await getCandles(brokerSymbol, "1H", 200);
 
       const candleData = { "1W": w1, "1D": d1, "4H": h4, "1H": h1 };
       const getDir = (tf) => {

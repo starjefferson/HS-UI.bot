@@ -3,6 +3,7 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import dotenv from "dotenv";
+import { formatSymbol } from "./utils/symbolHelper.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -161,16 +162,17 @@ export function getMetaApiTimeframe(tf) {
  */
 export async function getCandles(symbol, timeframe, count = 200, retries = 3) {
   const metaTf = getMetaApiTimeframe(timeframe);
+  const brokerSymbol = formatSymbol(symbol);
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const { account } = await ensureSynced();
 
-      console.log(`📥 [MetaApi] Fetching ${count} candles for ${symbol} (${metaTf})${attempt > 1 ? ` (Retry ${attempt}/${retries})` : ""}...`);
-      const candles = await account.getHistoricalCandles(symbol, metaTf, undefined, count);
+      console.log(`📥 [MetaApi] Fetching ${count} candles for ${brokerSymbol} (${metaTf})${attempt > 1 ? ` (Retry ${attempt}/${retries})` : ""}...`);
+      const candles = await account.getHistoricalCandles(brokerSymbol, metaTf, undefined, count);
 
       if (!candles || candles.length === 0) {
-        console.warn(`⚠️ [MetaApi] No candle data returned for ${symbol}`);
+        console.warn(`⚠️ [MetaApi] No candle data returned for ${brokerSymbol}`);
         return null;
       }
 
@@ -185,7 +187,7 @@ export async function getCandles(symbol, timeframe, count = 200, retries = 3) {
           close: parseFloat(c.close)
         }));
     } catch (error) {
-      console.error(`❌ [MetaApi] Error fetching candles for ${symbol} (${timeframe}) [Attempt ${attempt}/${retries}]:`, error.message || error);
+      console.error(`❌ [MetaApi] Error fetching candles for ${brokerSymbol} (${timeframe}) [Attempt ${attempt}/${retries}]:`, error.message || error);
       if (attempt === retries) return null;
       isInitialized = false;
       connectionInstance = null;
@@ -222,13 +224,14 @@ export async function getAccountBalance() {
  * @returns {Promise<{bid: number, ask: number}|null>}
  */
 export async function getSymbolPrice(symbol) {
+  const brokerSymbol = formatSymbol(symbol);
   try {
     const { connection } = await ensureSynced();
-    const priceInfo = await connection.getSymbolPrice(symbol);
+    const priceInfo = await connection.getSymbolPrice(brokerSymbol);
     if (!priceInfo || !priceInfo.bid || !priceInfo.ask) return null;
     return { bid: parseFloat(priceInfo.bid), ask: parseFloat(priceInfo.ask) };
   } catch (error) {
-    console.error(`❌ [MetaApi] getSymbolPrice error for ${symbol}:`, error.message || error);
+    console.error(`❌ [MetaApi] getSymbolPrice error for ${brokerSymbol}:`, error.message || error);
     return null;
   }
 }
@@ -237,19 +240,20 @@ export async function getSymbolPrice(symbol) {
  * Execute a market order on IC Markets MT5 via MetaApi RPC.
  */
 export async function placeOrder({ symbol, amount, side, sl, tp, minimumRR }) {
+  const brokerSymbol = formatSymbol(symbol);
   try {
     const { connection } = await ensureSynced();
     if (side !== "buy" && side !== "sell") {
-      throw new Error(`Invalid order side "${side}" for ${symbol}.`);
+      throw new Error(`Invalid order side "${side}" for ${brokerSymbol}.`);
     }
     const [priceInfo, specification, accountInfo] = await Promise.all([
-      connection.getSymbolPrice(symbol),
-      connection.getSymbolSpecification(symbol),
+      connection.getSymbolPrice(brokerSymbol),
+      connection.getSymbolSpecification(brokerSymbol),
       connection.getAccountInformation()
     ]);
 
     if (!priceInfo || !priceInfo.ask || !priceInfo.bid) {
-      throw new Error(`Could not retrieve live market quote for ${symbol}`);
+      throw new Error(`Could not retrieve live market quote for ${brokerSymbol}`);
     }
 
     const isBuy = side.toLowerCase() === "buy";
@@ -264,7 +268,7 @@ export async function placeOrder({ symbol, amount, side, sl, tp, minimumRR }) {
     const liveRR = rewardDistance / slDistance;
     if (Number.isFinite(minimumRR) && liveRR < minimumRR) {
       throw new Error(
-        `Live quote reduces ${symbol} risk/reward to ${liveRR.toFixed(2)}, below minimum ${minimumRR}.`
+        `Live quote reduces ${brokerSymbol} risk/reward to ${liveRR.toFixed(2)}, below minimum ${minimumRR}.`
       );
     }
 
@@ -272,7 +276,7 @@ export async function placeOrder({ symbol, amount, side, sl, tp, minimumRR }) {
     const accountCurrency = accountInfo.currency;
     const contractSize = specification.contractSize;
     if (!profitCurrency || !accountCurrency || !(contractSize > 0)) {
-      throw new Error(`Missing contract or currency specification needed to size ${symbol} safely.`);
+      throw new Error(`Missing contract or currency specification needed to size ${brokerSymbol} safely.`);
     }
 
     const currencyConversionRate = await getCurrencyConversionRate(
@@ -282,14 +286,14 @@ export async function placeOrder({ symbol, amount, side, sl, tp, minimumRR }) {
     );
     const riskPerLot = slDistance * contractSize * currencyConversionRate;
     if (!(riskPerLot > 0) || !Number.isFinite(riskPerLot)) {
-      throw new Error(`Could not calculate per-lot risk for ${symbol}.`);
+      throw new Error(`Could not calculate per-lot risk for ${brokerSymbol}.`);
     }
 
     const rawVolume = amount / riskPerLot;
     const minimumVolume = specification.minVolume;
     const volumeStep = specification.volumeStep;
     if (!(minimumVolume > 0) || !(volumeStep > 0)) {
-      throw new Error(`Missing minimum volume or volume step for ${symbol}.`);
+      throw new Error(`Missing minimum volume or volume step for ${brokerSymbol}.`);
     }
     const maxVolume = specification.maxVolume;
     const limitedVolume = Number.isFinite(maxVolume) ? Math.min(rawVolume, maxVolume) : rawVolume;
@@ -298,19 +302,19 @@ export async function placeOrder({ symbol, amount, side, sl, tp, minimumRR }) {
     );
     if (volume < minimumVolume) {
       throw new Error(
-        `Minimum ${minimumVolume} lot would exceed the ${accountCurrency} ${amount.toFixed(2)} risk budget for ${symbol}.`
+        `Minimum ${minimumVolume} lot would exceed the ${accountCurrency} ${amount.toFixed(2)} risk budget for ${brokerSymbol}.`
       );
     }
 
-    console.log(`🎯 [MetaApi] Placing ${side.toUpperCase()} on ${symbol} | Lot Size: ${volume} | Entry: ${entryPrice} | SL: ${sl} | TP: ${tp}`);
+    console.log(`🎯 [MetaApi] Placing ${side.toUpperCase()} on ${brokerSymbol} | Lot Size: ${volume} | Entry: ${entryPrice} | SL: ${sl} | TP: ${tp}`);
 
     let result;
     const options = { comment: "normal-bot order" };
 
     if (isBuy) {
-      result = await connection.createMarketBuyOrder(symbol, volume, sl, tp, options);
+      result = await connection.createMarketBuyOrder(brokerSymbol, volume, sl, tp, options);
     } else {
-      result = await connection.createMarketSellOrder(symbol, volume, sl, tp, options);
+      result = await connection.createMarketSellOrder(brokerSymbol, volume, sl, tp, options);
     }
 
     return {
@@ -319,7 +323,7 @@ export async function placeOrder({ symbol, amount, side, sl, tp, minimumRR }) {
       entryPrice
     };
   } catch (error) {
-    console.error(`❌ [MetaApi] Order placement failed for ${symbol}:`, error.message || error);
+    console.error(`❌ [MetaApi] Order placement failed for ${brokerSymbol}:`, error.message || error);
     return null;
   }
 }
