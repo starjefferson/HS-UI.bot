@@ -1,12 +1,16 @@
 export const config = {
   // Monitored Assets
   pairs: [
-    // Forex Majors (7)
+    // G10 Forex pairs (28)
     "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
-    // Precious Metals (1) - Remove if Gold is completely disabled
+    "EURGBP", "EURJPY", "EURCHF", "EURCAD", "EURAUD", "EURNZD",
+    "GBPJPY", "GBPCHF", "GBPCAD", "GBPAUD", "GBPNZD",
+    "AUDJPY", "AUDCHF", "AUDCAD", "AUDNZD",
+    "NZDJPY", "NZDCHF", "NZDCAD",
+    "CADJPY", "CADCHF",
+    "CHFJPY",
+    // Precious metal (1)
     "XAUUSD",
-    // Best FX Crosses (4)
-    "EURGBP", "EURJPY", "GBPJPY", "AUDJPY",
   ],
 
   // Analysis timeframes for top-down trend bias & pattern scanning

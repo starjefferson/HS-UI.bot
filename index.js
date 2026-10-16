@@ -20,14 +20,7 @@ if (fs.existsSync(path.join(__dirname, ".env.local"))) {
   dotenv.config();
 }
 
-const BASE_PAIRS = [
-  // Forex Majors (7) — deep liquidity, clean H&S structure
-  "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
-  // Precious Metals (1)
-  "XAUUSD",
-  // Best FX Crosses (4) — high liquidity, reliable MetaApi data
-  "EURGBP", "EURJPY", "GBPJPY", "AUDJPY",
-];
+const BASE_PAIRS = config.pairs;
 const PAIRS = getFormattedSymbols(BASE_PAIRS);
 
 const HISTORY_PATH = "./history.json";
