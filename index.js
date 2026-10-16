@@ -72,11 +72,11 @@ function getPipSize(symbol) {
 }
 
 /**
- * Central Scan Cycle for IC Markets via MetaApi
+ * Central Scan Cycle for HotForex via MetaApi
  */
 async function runTradingCycle() {
   console.log(`\n==================================================`);
-  console.log(`🔍 [${new Date().toISOString()}] Starting IC Markets (MetaApi) Market Scan...`);
+  console.log(`🔍 [${new Date().toISOString()}] Starting HotForex (MetaApi) Market Scan...`);
   console.log(`==================================================`);
 
   const history = loadJSON(HISTORY_PATH);
@@ -97,14 +97,15 @@ async function runTradingCycle() {
     let finalStatus = `⏭️ [${symbol}] Status: Scan complete (No valid setup)`;
     try {
       // Stage 1: Fetch historical candles for all scan timeframes.
-      console.log(`📥 [${symbol}] Fetching candles: W1, D1, H4, H1...`);
+      console.log(`📥 [${symbol}] Fetching candles: W1, D1, H4, H1, M15...`);
       await ensureMetaApiConnection();
-      const w1 = await getCandles(brokerSymbol, "1W", 50);
-      const d1 = await getCandles(brokerSymbol, "1D", 200);
-      const h4 = await getCandles(brokerSymbol, "4H", 200);
-      const h1 = await getCandles(brokerSymbol, "1H", 200);
+      const w1  = await getCandles(brokerSymbol, "1W",  50);
+      const d1  = await getCandles(brokerSymbol, "1D",  200);
+      const h4  = await getCandles(brokerSymbol, "4H",  200);
+      const h1  = await getCandles(brokerSymbol, "1H",  200);
+      const m15 = await getCandles(brokerSymbol, "15m", 200);
 
-      const candleData = { "1W": w1, "1D": d1, "4H": h4, "1H": h1 };
+      const candleData = { "1W": w1, "1D": d1, "4H": h4, "1H": h1, "15m": m15 };
       const getDir = (tf) => {
         const d = candleData[tf];
         if (!d || d.length < 20) return "none";
@@ -133,7 +134,7 @@ async function runTradingCycle() {
       }
 
       // Stage 3: Pattern detection; the callback also reports valid structures
-      // that are still waiting for their 1H breakout.
+      // that are still waiting for their timeframe-appropriate breakout.
       let patternDetected = false;
       const pattern = runDetection(candleData, symbol, bias, ({ type, activeTFs, structuralTF, stage }) => {
         patternDetected = true;
@@ -311,13 +312,22 @@ function scheduleNextHourlyScan() {
   console.log(`\n⏰ Next scheduled scan in ${minutesRemaining} minutes (at ${nextHour.toLocaleTimeString()}).`);
 
   setTimeout(async () => {
-    await runTradingCycle();
+    try {
+      await runTradingCycle();
+    } catch (err) {
+      console.error(`❌ [Scheduler] Hourly scan cycle failed: ${err?.message || err}. Continuing to next cycle.`);
+    }
     scheduleNextHourlyScan();
   }, delayMs);
 }
 
 // Startup Engine
-console.log("🚀 Starting Standalone MetaApi Head & Shoulders Trading Engine (Smart Hourly Mode)...");
-runTradingCycle().then(() => {
-  scheduleNextHourlyScan();
-});
+console.log("🚀 Starting Standalone MetaApi Head & Shoulders Trading Engine (HotForex / Smart Hourly Mode)...");
+
+runTradingCycle()
+  .catch((err) => {
+    console.error(`❌ [Startup] Initial scan cycle failed: ${err?.message || err}. Scheduler will retry on next hour.`);
+  })
+  .then(() => {
+    scheduleNextHourlyScan();
+  });

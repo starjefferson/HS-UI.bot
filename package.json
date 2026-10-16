@@ -1,38 +1,17 @@
 {
-  "name": "hs-ui",
+  "name": "hs-bot",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev:server": "node index.js",
-    "dev:ui": "next dev",
-    "dev": "concurrently \"npm run dev:server\" \"npm run dev:ui\"",
-    "build": "next build",
-    "start": "next start",
+    "dev": "node index.js",
+    "start": "node index.js",
     "start:prod": "pm2 start pm2.ecosystem.config.cjs",
-    "logs": "pm2 logs",
-    "monitor": "pm2 monit",
-    "test:deriv": "node test-deriv.js"
+    "logs": "pm2 logs hs-bot",
+    "monitor": "pm2 monit"
   },
   "dependencies": {
-    "axios": "^1.8.2",
-    "body-parser": "^2.2.1",
-    "cors": "^2.8.5",
     "dotenv": "^16.4.7",
-    "express": "^5.2.1",
-    "framer-motion": "^12.23.26",
-    "lucide-react": "^0.562.0",
-    "metaapi.cloud-sdk": "^29.3.3",
-    "next": "^16.1.1",
-    "react": "^19.2.3",
-    "react-dom": "^19.2.3",
-    "ws": "^8.18.0"
-  },
-  "devDependencies": {
-    "@tailwindcss/postcss": "^4.1.18",
-    "autoprefixer": "^10.4.23",
-    "concurrently": "^9.2.4",
-    "postcss": "^8.5.6",
-    "tailwindcss": "^4.1.18"
+    "metaapi.cloud-sdk": "^29.3.3"
   }
 }

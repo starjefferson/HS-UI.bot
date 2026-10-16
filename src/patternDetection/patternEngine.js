@@ -2,23 +2,42 @@ import { detectPatterns } from "./headShoulders.js";
 
 const trackedStructures = new Map();
 const STRUCTURE_MAX_AGE_CANDLES = 24;
-const TIMEFRAME_MILLISECONDS = { "4H": 4 * 60 * 60 * 1000, "1D": 24 * 60 * 60 * 1000 };
+const TIMEFRAME_MILLISECONDS = {
+    "1H": 1 * 60 * 60 * 1000,
+    "4H": 4 * 60 * 60 * 1000,
+    "1D": 24 * 60 * 60 * 1000
+};
+
+// Breakout confirmation timeframe per structural timeframe.
+// 1H patterns use 15m candles; all higher-TF patterns continue to use 1H.
+const BREAKOUT_TF_FOR_STRUCTURAL = {
+    "1H": "15m",
+    "4H": "1H",
+    "1D": "1H"
+};
+const BREAKOUT_TF_MILLISECONDS = {
+    "15m": 15 * 60 * 1000,
+    "1H":  60 * 60 * 1000
+};
 
 /**
  * Enhanced Detection Hub
  *
  * Architecture:
- *  - STRUCTURAL DETECTION: 4H and 1D candles only. The H&S / IH&S shape is
- *    identified on these timeframes. 1H is NOT used for structure.
- *  - ENTRY TRIGGER:        The first closed 1H candle clearing the far edge of
- *    the 4H/1D neckline region by the configured pip buffer is the sole trigger.
+ *  - STRUCTURAL DETECTION: 1H, 4H, and 1D candles. The H&S / IH&S shape is
+ *    identified on these timeframes.
+ *  - ENTRY TRIGGER (4H / 1D patterns): The first closed 1H candle clearing the
+ *    far edge of the neckline region by the configured pip buffer.
+ *  - ENTRY TRIGGER (1H patterns):      Uses 15m candles instead of 1H for the
+ *    breakout check — all other rules remain identical.
  *
  * candleData shape expected:
  *  {
- *    "1W": [...],   // Weekly candles — trend alignment
- *    "1D": [...],   // Daily candles  — structural detection + trend alignment
- *    "4H": [...],   // 4-Hour candles — structural detection
- *    "1H": [...],   // Hourly candles — breakout trigger only
+ *    "1W":  [...],  // Weekly candles  — trend alignment
+ *    "1D":  [...],  // Daily candles   — structural detection + trend alignment
+ *    "4H":  [...],  // 4-Hour candles  — structural detection
+ *    "1H":  [...],  // Hourly candles  — structural detection + breakout trigger (4H/1D patterns)
+ *    "15m": [...],  // 15-min candles  — breakout trigger for 1H patterns only
  *  }
  */
 export function runDetection(
@@ -36,8 +55,8 @@ export function runDetection(
         return null;
     }
 
-    // ── 1. Structural detection on 4H and 1D only ────────────────────────────
-    const structuralTFs = ["4H", "1D"];
+    // ── 1. Structural detection on 1D, 4H and 1H ─────────────────────────────
+    const structuralTFs = ["1D", "4H", "1H"];
     let detectedSetups  = {};
 
     for (const tf of structuralTFs) {
@@ -247,23 +266,28 @@ export function runDetection(
         return null;
     }
 
-    // ── 3. Multi-TF alignment: if both 4H and 1D detected, they must agree ───
-    if (detectedSetups["4H"] && detectedSetups["1D"]) {
-        if (detectedSetups["4H"].type !== detectedSetups["1D"].type) {
-            console.log(
-                `❌ [${symbol}] Multi-TF conflict: 4H is "${detectedSetups["4H"].type}" ` +
-                `but 1D is "${detectedSetups["1D"].type}". Setup rejected; no levels will be used.`
-            );
-            return null;
-        }
+    // ── 3. Multi-TF alignment: all detected TFs must agree on direction ───────
+    const detectedTypes = Object.values(detectedSetups).map(s => s.type);
+    if (detectedTypes.length > 1 && new Set(detectedTypes).size > 1) {
+        console.log(
+            `❌ [${symbol}] Multi-TF conflict: detected timeframes disagree on direction ` +
+            `(${Object.entries(detectedSetups).map(([tf, s]) => `${tf}="${s.type}"`).join(", ")}). ` +
+            `Setup rejected; no levels will be used.`
+        );
+        return null;
     }
 
-    // The smaller structural timeframe owns levels whenever both are accepted.
-    const structuralTF = detectedSetups["4H"] ? "4H" : "1D";
+    // Higher timeframes own levels when multiple structures agree.
+    // Priority: 1D > 4H > 1H.
+    const structuralTF = detectedSetups["1D"] ? "1D"
+        : detectedSetups["4H"] ? "4H"
+        : "1H";
     const structuralSetup = detectedSetups[structuralTF];
+    const contextNote = acceptedTFs.length > 1
+        ? `; ${acceptedTFs.filter(tf => tf !== structuralTF).join(" + ")} provide context only`
+        : "";
     console.log(
-        `[${symbol}] Selected ${structuralTF} ${structuralSetup.type.toUpperCase()} structure for entry/SL/TP levels` +
-        `${acceptedTFs.length > 1 ? `; 1D is context only, 4H levels take precedence` : ""}. ` +
+        `[${symbol}] Selected ${structuralTF} ${structuralSetup.type.toUpperCase()} structure for entry/SL/TP levels${contextNote}. ` +
         `Neckline ${structuralSetup.necklineStartPrice} → ${structuralSetup.necklineEndPrice}; ` +
         `SL ${structuralSetup.sl}; measured move ${structuralSetup.measuredMove}.`
     );
@@ -284,52 +308,50 @@ export function runDetection(
         stage
     });
 
-    // ── 4. 1H Breakout Trigger — require a fresh close across the neckline ───
-    const h1Candles = candleData["1H"];
-    const oneHourMs = 60 * 60 * 1000;
-    const closedH1Candles = (h1Candles || [])
-        .filter(candle => Number.isFinite(candle.time) && candle.time + oneHourMs <= Date.now())
+    // ── 4. Breakout Trigger — require a fresh candle close across the neckline ─
+    // For 1H structural patterns use 15m breakout candles; for 4H/1D use 1H.
+    const breakoutTF    = BREAKOUT_TF_FOR_STRUCTURAL[structuralTF] ?? "1H";
+    const breakoutTFMs  = BREAKOUT_TF_MILLISECONDS[breakoutTF];
+    const rawBreakoutCandles = candleData[breakoutTF];
+    const closedBreakoutCandles = (rawBreakoutCandles || [])
+        .filter(candle => Number.isFinite(candle.time) && candle.time + breakoutTFMs <= Date.now())
         .slice(0, 200);
-    if (closedH1Candles.length < 2) {
-        console.log(`⏳ [${symbol}] Waiting: fewer than two fully closed 1H candles are available.`);
+    if (closedBreakoutCandles.length < 2) {
+        console.log(`⏳ [${symbol}] Waiting: fewer than two fully closed ${breakoutTF} candles are available.`);
         reportPatternState("waiting-data");
         return null;
     }
 
-    const lastClosedH1 = closedH1Candles[0];
-    const previousClosedH1 = closedH1Candles[1];
-    const oldestClosedH1 = closedH1Candles[closedH1Candles.length - 1];
-    if (structuralSetup.rightShoulderTime < oldestClosedH1.time) {
+    const lastClosedBreakout     = closedBreakoutCandles[0];
+    const previousClosedBreakout = closedBreakoutCandles[1];
+    const oldestClosedBreakout   = closedBreakoutCandles[closedBreakoutCandles.length - 1];
+    if (structuralSetup.rightShoulderTime < oldestClosedBreakout.time) {
         console.log(
-            `⏭️ [${symbol}] No entry: the right-shoulder setup predates the available 1H breakout history; ` +
+            `⏭️ [${symbol}] No entry: the right-shoulder setup predates the available ${breakoutTF} breakout history; ` +
             `whether its first break was missed cannot be verified.`
         );
         reportPatternState("breakout-history-insufficient");
         return null;
     }
 
-    const previousBreakout = closedH1Candles
+    const previousBreakout = closedBreakoutCandles
         .slice(1)
         .find(candle => {
             if (candle.time < structuralSetup.rightShoulderTime) return false;
             const threshold = getBreakoutLevel(
                 structuralSetup,
-                candle.time + oneHourMs,
+                candle.time + breakoutTFMs,
                 breakoutBuffer
             );
             return isBeyondNeckline(candle.close, threshold, structuralSetup.type);
         });
     if (previousBreakout) {
-        const breakoutCheckTime = previousBreakout.time + oneHourMs;
-        const breakoutNeckline = getNecklineAtTime(structuralSetup, breakoutCheckTime);
-        const breakoutThreshold = getBreakoutLevel(
-            structuralSetup,
-            breakoutCheckTime,
-            breakoutBuffer
-        );
+        const breakoutCheckTime = previousBreakout.time + breakoutTFMs;
+        const breakoutNeckline  = getNecklineAtTime(structuralSetup, breakoutCheckTime);
+        const breakoutThreshold = getBreakoutLevel(structuralSetup, breakoutCheckTime, breakoutBuffer);
         console.log(
             `⏭️ [${symbol}] No late entry: ${structuralTF} ${structuralSetup.type.toUpperCase()} ` +
-            `setup head ${new Date(structuralSetup.headTime).toISOString()} had a prior 1H close beyond ` +
+            `setup head ${new Date(structuralSetup.headTime).toISOString()} had a prior ${breakoutTF} close beyond ` +
             `its projected neckline | Candle: ${new Date(previousBreakout.time).toISOString()} ` +
             `close ${previousBreakout.close} | Neckline ${breakoutNeckline} | ` +
             `${structuralSetup.type.toUpperCase()} threshold ${breakoutThreshold} ` +
@@ -339,37 +361,37 @@ export function runDetection(
         return null;
     }
 
-    const previousCheckTime = previousClosedH1.time + oneHourMs;
-    const latestCheckTime = lastClosedH1.time + oneHourMs;
-    const previousNeckline = getNecklineAtTime(structuralSetup, previousCheckTime);
-    const latestNeckline = getNecklineAtTime(structuralSetup, latestCheckTime);
+    const previousCheckTime   = previousClosedBreakout.time + breakoutTFMs;
+    const latestCheckTime     = lastClosedBreakout.time     + breakoutTFMs;
+    const previousNeckline    = getNecklineAtTime(structuralSetup, previousCheckTime);
+    const latestNeckline      = getNecklineAtTime(structuralSetup, latestCheckTime);
     const previousBreakoutLevel = getBreakoutLevel(structuralSetup, previousCheckTime, breakoutBuffer);
-    const breakoutLevel = getBreakoutLevel(structuralSetup, latestCheckTime, breakoutBuffer);
-    const breakoutConfirmed = checkH1NecklineBreakout(
-        previousClosedH1.close,
-        lastClosedH1.close,
+    const breakoutLevel         = getBreakoutLevel(structuralSetup, latestCheckTime,   breakoutBuffer);
+    const breakoutConfirmed = checkNecklineBreakout(
+        previousClosedBreakout.close,
+        lastClosedBreakout.close,
         previousBreakoutLevel,
         breakoutLevel,
         structuralSetup.type
     );
     if (!breakoutConfirmed) {
         console.log(
-            `⏳ [${symbol}] Waiting: no fresh 1H close cleared the sloped neckline by ${breakoutBuffer} ` +
-            `| Previous 1H check: neckline ${previousNeckline}, ` +
+            `⏳ [${symbol}] Waiting: no fresh ${breakoutTF} close cleared the sloped neckline by ${breakoutBuffer} ` +
+            `| Previous ${breakoutTF} check: neckline ${previousNeckline}, ` +
             `${structuralSetup.type === "sell" ? "SELL" : "BUY"} threshold ${previousBreakoutLevel}, ` +
-            `close ${previousClosedH1.close} | ` +
-            `Latest 1H check: neckline ${latestNeckline}, ` +
+            `close ${previousClosedBreakout.close} | ` +
+            `Latest ${breakoutTF} check: neckline ${latestNeckline}, ` +
             `${structuralSetup.type === "sell" ? "SELL" : "BUY"} threshold ${breakoutLevel}, ` +
-            `close ${lastClosedH1.close}.`
+            `close ${lastClosedBreakout.close}.`
         );
         reportPatternState("waiting-breakout");
         return null;
     }
 
-    const entryPrice = lastClosedH1.close;
+    const entryPrice = lastClosedBreakout.close;
     const necklineAtBreakout = getNecklineAtTime(
         structuralSetup,
-        lastClosedH1.time + oneHourMs
+        lastClosedBreakout.time + breakoutTFMs
     );
     const tp = structuralSetup.type === "sell"
         ? necklineAtBreakout - structuralSetup.measuredMove
@@ -403,19 +425,20 @@ export function runDetection(
     // ── 6. Build final setup ──────────────────────────────────────────────────
     reportPatternState("breakout-confirmed");
     console.log(
-        `✅ [${symbol}] First 1H close beyond sloped neckline by ${breakoutBuffer} — Structure: ${activeTFs.join(" + ")} | ` +
-        `Entry/SL/TP source: ${structuralTF} | Entry: ${entryPrice} | ` +
+        `✅ [${symbol}] First ${breakoutTF} close beyond sloped neckline by ${breakoutBuffer} — Structure: ${activeTFs.join(" + ")} | ` +
+        `Entry/SL/TP source: ${structuralTF} | Breakout TF: ${breakoutTF} | Entry: ${entryPrice} | ` +
         `SL: ${structuralSetup.sl} | TP: ${tp} | RR: ${rr.toFixed(2)}`
     );
 
     return {
         type:         structuralSetup.type,
-        label:        `${structuralSetup.label} (${structuralTF} levels / 1H trigger)`,
+        label:        `${structuralSetup.label} (${structuralTF} levels / ${breakoutTF} trigger)`,
         pair:         symbol,
         sl:           structuralSetup.sl,
         tp,
         entryPrice,
         structuralTF,
+        breakoutTF,
         breakoutNeckline: breakoutLevel,
         targetRR:     rr,
         necklineHigh: structuralSetup.necklineHigh,
@@ -427,12 +450,13 @@ export function runDetection(
     };
 }
 
-// ─── 1H Neckline Breakout Check ──────────────────────────────────────────────
+// ─── Neckline Breakout Check ─────────────────────────────────────────────────
 
 /**
  * A breakout requires a candle close beyond the far edge of the neckline region.
+ * Works for any breakout timeframe (1H for 4H/1D structures, 15m for 1H structures).
  */
-function checkH1NecklineBreakout(previousClose, latestClose, previousBoundary, latestBoundary, type) {
+function checkNecklineBreakout(previousClose, latestClose, previousBoundary, latestBoundary, type) {
     if (type === "sell") {
         return previousClose >= previousBoundary && latestClose < latestBoundary;
     }

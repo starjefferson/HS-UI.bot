@@ -1,70 +1,35 @@
-# Bot Rules & Architecture Reference
+# Bot Rules and Architecture
 
-## Trading Rules Applied
+## Runtime
 
-- H&S & Inverse H&S detection with neckline retest + HH/LL break
-- Top-down analysis across 1W → 1D → 4H → 1H
-- Trading window: 08:00–21:00 GMT+1 (enforced in `config.js`)
-- Single trade at a time per pair
-- Max 2 trades per week per pair enforced (`maxTradesPerWeek`)
-- Minimum 2-day cooldown between trades (`minDaysBetweenTrades`)
-- Max 7-day trade duration (`maxTradeHoldDays`)
-- Fixed 1:3 RR ratio target (2.5–3.0 RR range accepted)
-- Major forex pairs only
-- Modular React / Next.js + Tailwind dashboard UI
-- Full SL/TP calculation, logging, and pattern fingerprinting guard
+- `index.js` runs as a standalone Node.js process and schedules hourly scans.
+- `src/metaApi.js` connects to the configured MetaApi MetaTrader account for
+  candles, account information, positions, quotes, and order execution.
+- Credentials belong in `.env.local`; never commit them.
 
----
+## Scan and Trade Rules
 
-## Architecture (Current — Direct Deriv API)
+- Trend alignment uses W1, D1, H4, and H1; at least three timeframes must agree
+  to establish directional bias.
+- H&S and inverse H&S structures are scanned on D1, H4, and H1.
+- Conflicting pattern directions across accepted timeframes reject the setup.
+- When multiple same-direction patterns are accepted, level ownership is
+  prioritized D1 > H4 > H1. The other structures are context only.
+- Breakout confirmation uses H1 candles for D1/H4 structures and M15 candles
+  for H1 structures.
+- Before order placement the bot applies pattern fingerprinting, minimum RR,
+  trade-frequency, currency-correlation, and gold-specific checks.
+- Opened trades are recorded in `history.json`.
 
-```
-HS-UI.bot
- ├─ index.js                    ← Main bot engine (hourly scan loop)
- ├─ config.js                   ← Trading config (pairs, TFs, RR, limits)
- ├─ src/
- │   ├─ derivApi.js             ← Direct Deriv WebSocket API integration
- │   ├─ patternDetection/
- │   │   ├─ patternEngine.js    ← Multi-TF detection hub
- │   │   ├─ headShoulders.js    ← H&S structural detection
- │   │   ├─ topDownAnalysis.js  ← SMA-based trend alignment
- │   │   └─ utils.js            ← Math helpers
- │   ├─ riskManagement/
- │   │   └─ risk.js             ← Trade frequency & cooldown checks
- │   ├─ services/
- │   │   └─ brokerAPI.js        ← Deriv API service wrapper
- │   ├─ notificationService/
- │   │   └─ emailNotifications.js ← Notification placeholder
- │   └─ components/
- │       ├─ Dashboard.js        ← Main dashboard React component
- │       └─ DashboardWidget.js  ← Trade log widget
- ├─ app/
- │   ├─ layout.js               ← Next.js root layout
- │   ├─ page.js                 ← Root page (renders Dashboard)
- │   ├─ globals.css             ← Global Tailwind styles
- │   └─ api/broker/route.js     ← Next.js API route for UI data
- ├─ history.json                ← Persistent log of executed trades
- └─ pm2.ecosystem.config.cjs    ← PM2 production process config
-```
+The configured instruments, default risk cap, minimum RR, and breakout buffer
+are defined in `config.js`. Runtime overrides and their validation are in
+`index.js`.
 
----
+## Operations
 
-## Data Flow
+- Foreground: `npm start`
+- PM2: `npm run start:prod`
+- Logs: `npm run logs`
+- Process configuration: `pm2.ecosystem.config.cjs`
 
-```
-index.js (Bot Engine — hourly)
-  │
-  ├─ derivApi.js → Deriv WebSocket API → Fetches candles + balance
-  ├─ patternEngine.js → detectPatterns (H&S / Inverted H&S)
-  ├─ risk.js → canTrade() (weekly limit + cooldown check)
-  └─ derivApi.js → placeOrder() → Direct Deriv contract execution
-        │
-        └─ Writes result to history.json
-
-Next.js Dashboard (app/)
-  │
-  └─ app/api/broker/route.js
-       ├─ GET ?type=balance  → derivApi.getAccountBalance()
-       ├─ GET ?type=open     → reads history.json (last trade)
-       └─ GET ?type=trades   → reads history.json (total count)
-```
+This is a bot-only repository: it does not include a web UI or dashboard.

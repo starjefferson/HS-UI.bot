@@ -25,6 +25,7 @@ let apiInstance = null;
 let accountInstance = null;
 let connectionInstance = null;
 let isInitialized = false;
+let initializationPromise = null;
 let symbolsPromise = null;
 
 /**
@@ -34,58 +35,71 @@ async function initializeMetaApi() {
   if (isInitialized && accountInstance && connectionInstance) {
     return { account: accountInstance, connection: connectionInstance };
   }
+  if (initializationPromise) return initializationPromise;
 
-  const token = process.env.METAAPI_TOKEN?.trim();
-  const accountId = process.env.METAAPI_ACCOUNT_ID?.trim();
+  const initialization = (async () => {
+    const token = process.env.METAAPI_TOKEN?.trim();
+    const accountId = process.env.METAAPI_ACCOUNT_ID?.trim();
 
-  if (!token || !accountId) {
-    console.error("❌ [MetaApi Error] Missing environment variables.");
-    console.error(`- METAAPI_TOKEN present: ${!!token}`);
-    console.error(`- METAAPI_ACCOUNT_ID present: ${!!accountId}`);
-    throw new Error("Missing METAAPI_TOKEN or METAAPI_ACCOUNT_ID in environment variables.");
-  }
+    if (!token || !accountId) {
+      console.error("❌ [MetaApi Error] Missing environment variables.");
+      console.error(`- METAAPI_TOKEN present: ${!!token}`);
+      console.error(`- METAAPI_ACCOUNT_ID present: ${!!accountId}`);
+      throw new Error("Missing METAAPI_TOKEN or METAAPI_ACCOUNT_ID in environment variables.");
+    }
 
-  if (!apiInstance) {
-    console.log("🔌 [MetaApi] Initializing MetaApi Cloud SDK...");
-    apiInstance = new MetaApi(token);
-  }
+    if (!apiInstance) {
+      console.log("🔌 [MetaApi] Initializing MetaApi Cloud SDK...");
+      apiInstance = new MetaApi(token);
+    }
 
-  if (!accountInstance) {
-    console.log(`🔌 [MetaApi] Retrieving account (${accountId})...`);
-    accountInstance = await apiInstance.metatraderAccountApi.getAccount(accountId);
-  }
+    if (!accountInstance) {
+      console.log(`🔌 [MetaApi] Retrieving account (${accountId})...`);
+      accountInstance = await apiInstance.metatraderAccountApi.getAccount(accountId);
+    }
 
-  if (accountInstance.state !== "DEPLOYED") {
-    console.log(`🚀 [MetaApi] Account state is "${accountInstance.state}". Deploying account now...`);
-    await accountInstance.deploy();
-  }
+    if (accountInstance.state !== "DEPLOYED") {
+      console.log(`🚀 [MetaApi] Account state is "${accountInstance.state}". Deploying account now...`);
+      await accountInstance.deploy();
+    }
 
-  console.log("🔌 [MetaApi] Waiting for account connection to broker...");
-  await accountInstance.waitConnected();
+    console.log("🔌 [MetaApi] Waiting for account connection to broker...");
+    await accountInstance.waitConnected();
 
-  if (!connectionInstance) {
-    console.log("🔌 [MetaApi] Establishing RPC Connection...");
-    connectionInstance = accountInstance.getRPCConnection();
-    await connectionInstance.connect();
-    console.log("🔌 [MetaApi] Synchronizing terminal state with IC Markets...");
-    await connectionInstance.waitSynchronized();
-    console.log("✅ [MetaApi] Connection fully synchronized and ready!");
-  }
+    if (!connectionInstance) {
+      console.log("🔌 [MetaApi] Establishing RPC Connection...");
+      connectionInstance = accountInstance.getRPCConnection();
+      await connectionInstance.connect();
+      console.log("🔌 [MetaApi] Synchronizing terminal state with HotForex...");
+      await connectionInstance.waitSynchronized();
+      console.log("✅ [MetaApi] Connection fully synchronized and ready!");
+    }
 
-  isInitialized = true;
-  return { account: accountInstance, connection: connectionInstance };
+    isInitialized = true;
+    return { account: accountInstance, connection: connectionInstance };
+  })();
+
+  initializationPromise = initialization
+    .catch(async (error) => {
+      isInitialized = false;
+      if (connectionInstance) {
+        try {
+          await connectionInstance.close?.();
+        } catch (closeError) {
+          console.warn(`⚠️ [MetaApi] Failed to close incomplete RPC connection: ${closeError.message || closeError}`);
+        }
+        connectionInstance = null;
+      }
+      throw error;
+    })
+    .finally(() => {
+      initializationPromise = null;
+    });
+  return initializationPromise;
 }
-
-// Tracks the last time waitSynchronized() was called to prevent calling
-// it on every single candle fetch (44+ times per scan cycle).
-let lastSyncedAt = 0;
-const SYNC_COOLDOWN_MS = 60_000; // Only resync once per 60 seconds
 
 /**
  * Ensures account and RPC connection remain connected and synchronized.
- * Uses a 60-second cooldown on waitSynchronized() to prevent flooding the
- * log with "desynchronized" messages on every candle fetch. The MetaApi SDK
- * handles WebSocket failover and reconnection internally between our checks.
  */
 async function ensureSynced() {
   const { account, connection } = await initializeMetaApi();
@@ -102,20 +116,14 @@ async function ensureSynced() {
       ? connection.isSynchronized()
       : connection.isSynchronized;
 
-    const now = Date.now();
-    const cooldownExpired = (now - lastSyncedAt) > SYNC_COOLDOWN_MS;
-
-    if (synced === false && cooldownExpired) {
+    if (synced === false) {
       console.log("🔄 [MetaApi] RPC connection desynchronized. Resynchronizing with broker...");
       await connection.waitSynchronized();
-      lastSyncedAt = Date.now();
     }
   } catch (err) {
     console.warn(`⚠️ [MetaApi] Synchronization check failed: ${err.message}. Forcing reconnect...`);
-    isInitialized = false;
-    connectionInstance = null;
-    lastSyncedAt = 0;
-    return await initializeMetaApi();
+    await safeReconnect();
+    return { account: accountInstance, connection: connectionInstance };
   }
 
   return { account, connection };
@@ -137,7 +145,6 @@ export async function ensureMetaApiConnection() {
     console.warn("🔄 [MetaApi] Account connection is inactive. Waiting for reconnection...");
     await account.waitConnected();
     await connection.waitSynchronized();
-    lastSyncedAt = Date.now();
   }
 }
 
@@ -146,6 +153,7 @@ export async function ensureMetaApiConnection() {
  */
 export function getMetaApiTimeframe(tf) {
   const map = {
+    "15m": "15m",
     "1H": "1h",
     "4H": "4h",
     "1D": "1d",
@@ -154,6 +162,35 @@ export function getMetaApiTimeframe(tf) {
     "W": "1w"
   };
   return map[tf] || tf.toLowerCase();
+}
+
+// Serialized reconnect lock — prevents multiple concurrent candle fetches from
+// each tearing down and rebuilding the MetaApi connection simultaneously, which
+// was the root cause of the subscription TimeoutError crash loop.
+let reconnectPromise = null;
+
+async function safeReconnect() {
+  if (reconnectPromise) return reconnectPromise;
+  reconnectPromise = (async () => {
+    try {
+      console.log("🔄 [MetaApi] Reconnecting to broker (serialized)...");
+      // Only reset the connection layer; the api/account instances stay alive.
+      if (connectionInstance) {
+        try {
+          await connectionInstance.close?.();
+        } catch (error) {
+          console.warn(`⚠️ [MetaApi] Error closing stale RPC connection: ${error.message || error}`);
+        }
+      }
+      connectionInstance = null;
+      isInitialized = false;
+      await initializeMetaApi();
+      console.log("✅ [MetaApi] Reconnection complete.");
+    } finally {
+      reconnectPromise = null;
+    }
+  })();
+  return reconnectPromise;
 }
 
 /**
@@ -189,8 +226,8 @@ export async function getCandles(symbol, timeframe, count = 200, retries = 3) {
     } catch (error) {
       console.error(`❌ [MetaApi] Error fetching candles for ${brokerSymbol} (${timeframe}) [Attempt ${attempt}/${retries}]:`, error.message || error);
       if (attempt === retries) return null;
-      isInitialized = false;
-      connectionInstance = null;
+      // Serialized reconnect — safe even when many candle fetches run concurrently.
+      await safeReconnect();
       await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
     }
   }
@@ -198,7 +235,7 @@ export async function getCandles(symbol, timeframe, count = 200, retries = 3) {
 }
 
 /**
- * Fetch current account equity/balance from IC Markets via MetaApi.
+ * Fetch current account equity/balance from HotForex via MetaApi.
  */
 export async function getAccountBalance() {
   try {
@@ -237,7 +274,7 @@ export async function getSymbolPrice(symbol) {
 }
 
 /**
- * Execute a market order on IC Markets MT5 via MetaApi RPC.
+ * Execute a market order on HotForex MT5 via MetaApi RPC.
  */
 export async function placeOrder({ symbol, amount, side, sl, tp, minimumRR }) {
   const brokerSymbol = formatSymbol(symbol);
