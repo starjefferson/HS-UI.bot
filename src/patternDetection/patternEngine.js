@@ -720,11 +720,19 @@ function getBreakoutLevel(setup, time, breakoutBuffer) {
         : neckline + breakoutBuffer;
 }
 
-function getNecklineAtTime(setup, time) {
+export function getNecklineAtTime(setup, time) {
+    if (!setup) return 0;
     const elapsed = setup.necklineEndTime - setup.necklineStartTime;
-    if (!(elapsed > 0)) return setup.necklineEndPrice;
+    if (!(elapsed > 0) || time >= setup.necklineEndTime) {
+        // Clamp to Right Neckline price once past the Right Neckline pivot to prevent
+        // projecting the slope infinitely into the future and dragging thresholds away.
+        return setup.necklineEndPrice;
+    }
+    if (time <= setup.necklineStartTime) {
+        return setup.necklineStartPrice;
+    }
 
-    const progress = (time - setup.necklineStartTime) / elapsed;
+    const progress = Math.min(1, Math.max(0, (time - setup.necklineStartTime) / elapsed));
     return setup.necklineStartPrice +
         (setup.necklineEndPrice - setup.necklineStartPrice) * progress;
 }
