@@ -16,16 +16,22 @@ STARTUP
 
 SCAN CYCLE
 ----------
-1. Read account equity and open positions.
-2. For each configured symbol, fetch W1, D1, H4, H1, and M15 candles.
+1. The initial scan and hourly schedule read account equity and scan each
+   configured symbol for structure.
+2. Fetch W1, D1, H4, H1, and M15 candles for the structural scan.
 3. Require agreement from at least three of W1/D1/H4/H1 for a directional bias.
 4. Detect H&S structures on D1, H4, and H1. Reject conflicting directions.
    If multiple same-direction structures qualify, use D1 levels first, then H4,
    then H1; the other structures provide context.
-5. Confirm the breakout on H1 for D1/H4 structures or M15 for H1 structures.
-6. Apply pattern fingerprinting, risk/reward checks, trade-frequency and
-   correlation guards, plus the gold-specific guards before order submission.
-7. Record successfully opened trades in `history.json`.
+5. Confirm D1/H4 structure breakouts on H1 during the structural scan.
+6. A separate 15-minute monitor checks only locked, pending H1 structures,
+   using the latest closed M15 candle and the dynamically projected neckline.
+7. Before any order, refresh open positions and refuse execution if the account
+   already has five or more open trades. A failed position query also blocks
+   execution.
+8. Apply pattern fingerprinting, risk/reward, trade-frequency, correlation,
+   and gold-specific guards before order submission. Record successful trades
+   in `history.json`.
 
 OPERATIONS
 ----------

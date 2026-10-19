@@ -20,6 +20,123 @@ const BREAKOUT_TF_MILLISECONDS = {
     "1H":  60 * 60 * 1000
 };
 
+export function getPendingHourlyStructures() {
+    return [...trackedStructures.entries()]
+        .filter(([key, setup]) => key.endsWith(":1H") && setup.monitoringState === "pending")
+        .map(([key, setup]) => ({
+            symbol: key.slice(0, -3),
+            setup
+        }));
+}
+
+export function setHourlyStructureMonitoringState(symbol, headTime, state, capBlocked = false) {
+    const setup = trackedStructures.get(`${symbol}:1H`);
+    if (!setup || setup.headTime !== headTime) return;
+    setup.monitoringState = state;
+    setup.capBlocked = capBlocked;
+}
+
+export function pauseHourlyStructureMonitoring(symbol) {
+    const setup = trackedStructures.get(`${symbol}:1H`);
+    if (setup?.monitoringState === "pending") {
+        setup.monitoringState = "bias-unavailable";
+    }
+}
+
+export function checkPendingHourlyBreakout(symbol, latestClosedCandle, breakoutBuffer, minimumRR) {
+    const setup = trackedStructures.get(`${symbol}:1H`);
+    if (
+        !setup ||
+        setup.monitoringState !== "pending" ||
+        !latestClosedCandle ||
+        !Number.isFinite(latestClosedCandle.time) ||
+        !Number.isFinite(latestClosedCandle.close)
+    ) {
+        return null;
+    }
+
+    const previousCandle = setup.lastBreakoutCandle;
+    if (!previousCandle || latestClosedCandle.time <= previousCandle.time) {
+        return null;
+    }
+    setup.lastBreakoutCandle = latestClosedCandle;
+    if (previousCandle.time < setup.rightShoulderTime) return null;
+
+    const breakoutTFMs = BREAKOUT_TF_MILLISECONDS["15m"];
+    const previousCheckTime = previousCandle.time + breakoutTFMs;
+    const latestCheckTime = latestClosedCandle.time + breakoutTFMs;
+    const previousNeckline = getNecklineAtTime(setup, previousCheckTime);
+    const latestNeckline = getNecklineAtTime(setup, latestCheckTime);
+    const previousBreakoutLevel = getBreakoutLevel(setup, previousCheckTime, breakoutBuffer);
+    const breakoutLevel = getBreakoutLevel(setup, latestCheckTime, breakoutBuffer);
+
+    if (!checkNecklineBreakout(
+        previousCandle.close,
+        latestClosedCandle.close,
+        previousBreakoutLevel,
+        breakoutLevel,
+        setup.type
+    )) {
+        console.log(
+            `⏳ [${symbol}] Waiting: no fresh 15m close cleared the sloped neckline by ${breakoutBuffer} ` +
+            `| Previous 15m check: neckline ${previousNeckline}, ` +
+            `${setup.type === "sell" ? "SELL" : "BUY"} threshold ${previousBreakoutLevel}, ` +
+            `close ${previousCandle.close} | Latest 15m check: neckline ${latestNeckline}, ` +
+            `${setup.type === "sell" ? "SELL" : "BUY"} threshold ${breakoutLevel}, ` +
+            `close ${latestClosedCandle.close}.`
+        );
+        return null;
+    }
+
+    const entryPrice = latestClosedCandle.close;
+    const tp = setup.type === "sell"
+        ? latestNeckline - setup.measuredMove
+        : latestNeckline + setup.measuredMove;
+    const risk = setup.type === "sell" ? setup.sl - entryPrice : entryPrice - setup.sl;
+    const reward = setup.type === "sell" ? entryPrice - tp : tp - entryPrice;
+    const rr = risk > 0 ? reward / risk : NaN;
+
+    if (!(risk > 0) || !(reward > 0) || !Number.isFinite(rr)) {
+        console.log(
+            `❌ [${symbol}] REJECTED: Invalid measured-move trade levels | ` +
+            `Entry: ${entryPrice} | SL: ${setup.sl} | TP: ${tp} | Risk: ${risk} | Reward: ${reward}`
+        );
+        setup.monitoringState = setup.capBlocked ? "pending" : "invalid-levels";
+        return null;
+    }
+    if (rr < minimumRR) {
+        console.log(
+            `❌ [${symbol}] REJECTED: Breakout close is overextended; measured-move RR ${rr.toFixed(2)} ` +
+            `is below the ${minimumRR} minimum | Entry: ${entryPrice} | SL: ${setup.sl} | TP: ${tp}.`
+        );
+        setup.monitoringState = setup.capBlocked ? "pending" : "rr-rejected";
+        return null;
+    }
+
+    console.log(
+        `✅ [${symbol}] First 15m close beyond sloped neckline by ${breakoutBuffer} — Structure: 1H | ` +
+        `Entry/SL/TP source: 1H | Breakout TF: 15m | Entry: ${entryPrice} | ` +
+        `SL: ${setup.sl} | TP: ${tp} | RR: ${rr.toFixed(2)}`
+    );
+    return {
+        type: setup.type,
+        label: `${setup.label} (1H levels / 15m trigger)`,
+        pair: symbol,
+        sl: setup.sl,
+        tp,
+        entryPrice,
+        structuralTF: "1H",
+        breakoutTF: "15m",
+        breakoutNeckline: breakoutLevel,
+        targetRR: rr,
+        necklineHigh: setup.necklineHigh,
+        necklineLow: setup.necklineLow,
+        headTime: setup.headTime || Date.now(),
+        activeTFs: ["1H"],
+        timestamp: Date.now()
+    };
+}
+
 /**
  * Enhanced Detection Hub
  *
@@ -47,7 +164,8 @@ export function runDetection(
     onPatternDetected,
     {
         breakoutBuffer = getPipSize(symbol) * 2,
-        minimumRR = 2.5
+        minimumRR = 2.5,
+        deferHourlyBreakouts = false
     } = {}
 ) {
     if (expectedBias !== "buy" && expectedBias !== "sell") {
@@ -269,6 +387,10 @@ export function runDetection(
     // ── 3. Multi-TF alignment: all detected TFs must agree on direction ───────
     const detectedTypes = Object.values(detectedSetups).map(s => s.type);
     if (detectedTypes.length > 1 && new Set(detectedTypes).size > 1) {
+        const hourlySetup = trackedStructures.get(`${symbol}:1H`);
+        if (hourlySetup?.monitoringState === "pending") {
+            hourlySetup.monitoringState = "multi-timeframe-conflict";
+        }
         console.log(
             `❌ [${symbol}] Multi-TF conflict: detected timeframes disagree on direction ` +
             `(${Object.entries(detectedSetups).map(([tf, s]) => `${tf}="${s.type}"`).join(", ")}). ` +
@@ -283,6 +405,12 @@ export function runDetection(
         : detectedSetups["4H"] ? "4H"
         : "1H";
     const structuralSetup = detectedSetups[structuralTF];
+    if (structuralTF !== "1H") {
+        const hourlySetup = trackedStructures.get(`${symbol}:1H`);
+        if (hourlySetup?.monitoringState === "pending") {
+            hourlySetup.monitoringState = "superseded";
+        }
+    }
     const contextNote = acceptedTFs.length > 1
         ? `; ${acceptedTFs.filter(tf => tf !== structuralTF).join(" + ")} provide context only`
         : "";
@@ -301,12 +429,48 @@ export function runDetection(
     }
 
     const activeTFs = Object.keys(detectedSetups);
-    const reportPatternState = (stage) => onPatternDetected?.({
-        type: structuralSetup.type,
-        activeTFs,
-        structuralTF,
-        stage
-    });
+    const reportPatternState = (stage, previousCandle = null) => {
+        const tracked = trackedStructures.get(`${symbol}:${structuralTF}`);
+        if (tracked?.headTime === structuralSetup.headTime) {
+            if (stage === "waiting-breakout" || stage === "waiting-data") {
+                tracked.monitoringState = "pending";
+                if (previousCandle) {
+                    tracked.lastBreakoutCandle = previousCandle;
+                } else {
+                    const latestClosed = (rawBreakoutCandles || []).find(candle =>
+                        Number.isFinite(candle.time) &&
+                        candle.time + breakoutTFMs <= Date.now()
+                    );
+                    if (latestClosed && (
+                        !tracked.lastBreakoutCandle ||
+                        latestClosed.time > tracked.lastBreakoutCandle.time
+                    )) {
+                        tracked.lastBreakoutCandle = latestClosed;
+                    }
+                }
+            } else if (stage === "breakout-missed" && tracked.capBlocked) {
+                tracked.monitoringState = "pending";
+                const latestClosed = (rawBreakoutCandles || []).find(candle =>
+                    Number.isFinite(candle.time) &&
+                    candle.time + breakoutTFMs <= Date.now()
+                );
+                if (latestClosed && (
+                    !tracked.lastBreakoutCandle ||
+                    latestClosed.time > tracked.lastBreakoutCandle.time
+                )) {
+                    tracked.lastBreakoutCandle = latestClosed;
+                }
+            } else {
+                tracked.monitoringState = stage;
+            }
+        }
+        onPatternDetected?.({
+            type: structuralSetup.type,
+            activeTFs,
+            structuralTF,
+            stage
+        });
+    };
 
     // ── 4. Breakout Trigger — require a fresh candle close across the neckline ─
     // For 1H structural patterns use 15m breakout candles; for 4H/1D use 1H.
@@ -385,6 +549,14 @@ export function runDetection(
             `close ${lastClosedBreakout.close}.`
         );
         reportPatternState("waiting-breakout");
+        return null;
+    }
+
+    if (structuralTF === "1H" && deferHourlyBreakouts) {
+        console.log(
+            `🔎 [${symbol}] Latest 15m neckline close delegated to the dedicated breakout monitor.`
+        );
+        reportPatternState("waiting-breakout", previousClosedBreakout);
         return null;
     }
 

@@ -2,8 +2,14 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
-import { getCandles, getAccountBalance, placeOrder, getOpenPositions, getSymbolPrice, ensureMetaApiConnection } from "./src/metaApi.js";
-import { runDetection } from "./src/patternDetection/patternEngine.js";
+import { getCandles, getAccountBalance, placeOrder, getOpenPositionsForSafety, getSymbolPrice, ensureMetaApiConnection } from "./src/metaApi.js";
+import {
+  runDetection,
+  getPendingHourlyStructures,
+  checkPendingHourlyBreakout,
+  setHourlyStructureMonitoringState,
+  pauseHourlyStructureMonitoring
+} from "./src/patternDetection/patternEngine.js";
 import * as goldGuard from "./src/risk/goldGuard.js";
 import { canExecuteCorrelatedTrade } from "./src/risk/correlationGuard.js";
 import { logTradeOpen } from "./src/utils/historyLogger.js";
@@ -22,6 +28,10 @@ if (fs.existsSync(path.join(__dirname, ".env.local"))) {
 
 const BASE_PAIRS = config.pairs;
 const PAIRS = getFormattedSymbols(BASE_PAIRS);
+const MAX_OPEN_TRADES = 5;
+const executingPatterns = new Set();
+const processedPatterns = new Set();
+let orderQueue = Promise.resolve();
 
 const HISTORY_PATH = "./history.json";
 const RISK_PERCENT = Number(process.env.RISK_PERCENT ?? config.riskPercent);
@@ -64,6 +74,151 @@ function getPipSize(symbol) {
   return 0.0001;
 }
 
+async function withOrderLock(task) {
+  const previous = orderQueue;
+  let release;
+  orderQueue = new Promise(resolve => { release = resolve; });
+  await previous;
+  try {
+    return await task();
+  } finally {
+    release();
+  }
+}
+
+async function executePatternTrade({ symbol, pattern, history, balance, currentPrice }) {
+  const patternID = `${symbol}_${pattern.type}_${pattern.headTime}`;
+  if (processedPatterns.has(patternID) || history.find(h => h.patternID === patternID)) {
+    console.log(`ℹ️ [${symbol}] Pattern ${patternID} already traded or processed.`);
+    return null;
+  }
+  if (executingPatterns.has(patternID)) {
+    console.log(`ℹ️ [${symbol}] Pattern ${patternID} is already being executed.`);
+    return null;
+  }
+
+  const entryPrice = pattern.entryPrice;
+  const risk = pattern.type === "sell"
+    ? pattern.sl - entryPrice
+    : entryPrice - pattern.sl;
+  const reward = pattern.type === "sell"
+    ? entryPrice - pattern.tp
+    : pattern.tp - entryPrice;
+  const rr = risk > 0 ? reward / risk : NaN;
+
+  if (!(risk > 0) || !(reward > 0) || !Number.isFinite(rr) || rr < MIN_RR) {
+    console.log(
+      `❌ [${symbol}] REJECTED: Invalid levels or breakout overextended below minimum RR | ` +
+      `Entry: ${entryPrice} | SL: ${pattern.sl} | TP: ${pattern.tp} | ` +
+      `RR: ${Number.isFinite(rr) ? rr.toFixed(2) : "invalid"} | Minimum: ${MIN_RR} | ` +
+      `Risk: ${risk} | Reward: ${reward}`
+    );
+    return null;
+  }
+
+  const nowMs = Date.now();
+  const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
+  const tradesThisWeek = history.filter(h => (nowMs - new Date(h.executionTime).getTime()) < oneWeekMs);
+  if (tradesThisWeek.length >= 10) {
+    console.log(`❌ [${symbol}] REJECTED: Weekly trade limit reached | Trades: ${tradesThisWeek.length} | Required: <10`);
+    return null;
+  }
+
+  if (goldGuard.isGoldSymbol(symbol)) {
+    try {
+      const priceInfo = await getSymbolPrice(symbol);
+      if (priceInfo?.bid && priceInfo?.ask) {
+        const spreadCheck = goldGuard.validateGoldSpread(priceInfo.bid, priceInfo.ask);
+        if (!spreadCheck.allowed) {
+          console.log(`❌ [${symbol}] REJECTED: Gold spread too wide | Spread: $${spreadCheck.spread}`);
+          return null;
+        }
+      }
+    } catch (err) {
+      console.warn(`[GOLD GUARD] ${symbol}: Spread check skipped (price fetch error): ${err?.message || String(err)}`);
+    }
+  }
+
+  if (executingPatterns.has(patternID)) return null;
+  executingPatterns.add(patternID);
+  try {
+    return await withOrderLock(async () => {
+      if (processedPatterns.has(patternID) || history.find(h => h.patternID === patternID)) {
+        console.log(`ℹ️ [${symbol}] Pattern ${patternID} already traded or processed.`);
+        return null;
+      }
+
+      let openPositions;
+      try {
+        openPositions = await getOpenPositionsForSafety();
+      } catch (error) {
+        console.error(`❌ [MetaApi] Open-position safety check failed for ${symbol}: ${error.message || error}`);
+        console.error(`⚠️ [${symbol}] SAFETY: Refusing order because the number of open trades could not be verified.`);
+        if (pattern.structuralTF === "1H") {
+          setHourlyStructureMonitoringState(symbol, pattern.headTime, "pending", true);
+        }
+        return `❌ [${symbol}] Status: Open-trade safety check failed`;
+      }
+
+      if (openPositions.length >= MAX_OPEN_TRADES) {
+        console.warn(
+          `⚠️ [${symbol}] SAFETY: Maximum open trades reached (${openPositions.length}/${MAX_OPEN_TRADES}); ` +
+          `order skipped and structure remains monitored.`
+        );
+        if (pattern.structuralTF === "1H") {
+          setHourlyStructureMonitoringState(symbol, pattern.headTime, "pending", true);
+        }
+        return `⏭️ [${symbol}] Status: Maximum open trades reached (${openPositions.length}/${MAX_OPEN_TRADES})`;
+      }
+
+      const correlationCheck = canExecuteCorrelatedTrade(symbol, openPositions);
+      if (!correlationCheck.isAllowed) {
+        console.log(`❌ [${symbol}] REJECTED: Currency correlation guard | Reason: ${correlationCheck.reason}`);
+        return null;
+      }
+
+      const stakeAmount = balance * (RISK_PERCENT / 100);
+      console.log(`🎯 [${symbol}] RR ${rr.toFixed(2)} meets minimum ${MIN_RR}. Maximum risk budget: $${stakeAmount.toFixed(2)}.`);
+      const orderResult = await placeOrder({
+        symbol,
+        amount: stakeAmount,
+        side: pattern.type,
+        sl: pattern.sl,
+        tp: pattern.tp,
+        minimumRR: MIN_RR
+      });
+
+      if (!orderResult) {
+        console.error(`❌ [${symbol}] Trade execution failed: MetaApi did not return an order result.`);
+        return `❌ [${symbol}] Status: Trade execution failed`;
+      }
+
+      const executionTime = new Date().toISOString();
+      const status = `🚀 [${symbol}] Action: Executing Trade / Sending Alert | Order ID: ${orderResult.contract_id}`;
+      logTradeOpen({
+        patternID,
+        ticketId: String(orderResult.contract_id),
+        symbol,
+        type: pattern.type,
+        entryPrice: orderResult.entryPrice ?? currentPrice,
+        sl: pattern.sl,
+        tp: pattern.tp,
+        volume: orderResult.volume,
+        rr: rr.toFixed(2),
+        executionTime
+      });
+      history.push({ patternID, executionTime });
+      processedPatterns.add(patternID);
+      if (pattern.structuralTF === "1H") {
+        setHourlyStructureMonitoringState(symbol, pattern.headTime, "executed");
+      }
+      return status;
+    });
+  } finally {
+    executingPatterns.delete(patternID);
+  }
+}
+
 /**
  * Central Scan Cycle for HotForex via MetaApi
  */
@@ -80,10 +235,6 @@ async function runTradingCycle() {
     console.error(`❌ [MetaApi] Market scan aborted: account equity is unavailable (${error.message || error}).`);
     return;
   }
-
-  // Fetch live open positions once per cycle for the correlation guard.
-  // Degrades gracefully to [] on error — guard will pass all trades through.
-  const openPositions = await getOpenPositions();
 
   for (const [pairIndex, brokerSymbol] of PAIRS.entries()) {
     const symbol = BASE_PAIRS[pairIndex];
@@ -114,6 +265,7 @@ async function runTradingCycle() {
       console.log(`📡 [${symbol}] Trends | W1:${t.W1} D1:${t.D1} H4:${t.H4} H1:${t.H1} | Bias: ${bias.toUpperCase()}`);
 
       if (!w1 || !d1 || !h4 || !h1 || h1.length < 200) {
+        pauseHourlyStructureMonitoring(symbol);
         console.log(`⚠️ [${symbol}] Insufficient candle history returned from MetaApi.`);
         console.log(`ℹ️ [${symbol}] No valid Head & Shoulders pattern detected.`);
         continue;
@@ -122,6 +274,7 @@ async function runTradingCycle() {
       const currentPrice = h1[0].close;
 
       if (bias === "none") {
+        pauseHourlyStructureMonitoring(symbol);
         console.log(`ℹ️ [${symbol}] Scan skipped: W1/D1/H4/H1 trend bias is not aligned.`);
         continue;
       }
@@ -159,7 +312,8 @@ async function runTradingCycle() {
         }
       }, {
         breakoutBuffer: getPipSize(symbol) * BREAKOUT_BUFFER_PIPS,
-        minimumRR: MIN_RR
+        minimumRR: MIN_RR,
+        deferHourlyBreakouts: true
       });
 
       if (!patternDetected) {
@@ -172,113 +326,14 @@ async function runTradingCycle() {
         continue;
       }
 
-      // 4. Pattern Fingerprinting Guard (One & Done)
-      const patternID = `${symbol}_${pattern.type}_${pattern.headTime}`;
-      if (history.find(h => h.patternID === patternID)) {
-        console.log(`ℹ️ [${symbol}] Pattern ${patternID} already traded or processed.`);
-        continue;
-      }
-
-      // 7. Require pattern-based reward to preserve the configured minimum RR.
-      const entryPrice = pattern.entryPrice;
-      const risk = pattern.type === "sell"
-        ? pattern.sl - entryPrice
-        : entryPrice - pattern.sl;
-      const reward = pattern.type === "sell"
-        ? entryPrice - pattern.tp
-        : pattern.tp - entryPrice;
-      const rr = risk > 0 ? reward / risk : NaN;
-
-      if (!(risk > 0) || !(reward > 0) || !Number.isFinite(rr) || rr < MIN_RR) {
-        console.log(
-          `❌ [${symbol}] REJECTED: Invalid levels or breakout overextended below minimum RR | ` +
-          `Entry: ${entryPrice} | SL: ${pattern.sl} | TP: ${pattern.tp} | ` +
-          `RR: ${Number.isFinite(rr) ? rr.toFixed(2) : "invalid"} | Minimum: ${MIN_RR} | ` +
-          `Risk: ${risk} | Reward: ${reward}`
-        );
-        continue;
-      }
-
-      // 8. Trade Frequency Guard (Max 10 trades per rolling week, no cooldown)
-      const nowMs = Date.now();
-      const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
-      const tradesThisWeek = history.filter(h => (nowMs - new Date(h.executionTime).getTime()) < oneWeekMs);
-      
-      if (tradesThisWeek.length >= 10) {
-        console.log(`❌ [${symbol}] REJECTED: Weekly trade limit reached | Trades: ${tradesThisWeek.length} | Required: <10`);
-        continue;
-      }
-
-      // ── Pre-Trade Validation Pipeline ──────────────────────────────────────
-
-      // 8.5a. Currency Correlation Guard
-      // Blocks entry if either the base or quote currency already has 2 open
-      // trades, preventing dangerous cluster exposure to a single currency.
-      const correlationCheck = canExecuteCorrelatedTrade(symbol, openPositions);
-      if (!correlationCheck.isAllowed) {
-        console.log(`❌ [${symbol}] REJECTED: Currency correlation guard | Reason: ${correlationCheck.reason}`);
-        continue;
-      }
-
-      // 8.5b. Gold-Specific Guards (only applied when symbol is XAUUSD / GOLD)
-      if (goldGuard.isGoldSymbol(symbol)) {
-        // Live spread check using MetaApi tick price
-        try {
-          const priceInfo = await getSymbolPrice(symbol);
-          if (priceInfo?.bid && priceInfo?.ask) {
-            const spreadCheck = goldGuard.validateGoldSpread(priceInfo.bid, priceInfo.ask);
-            if (!spreadCheck.allowed) {
-              console.log(`❌ [${symbol}] REJECTED: Gold spread too wide | Spread: $${spreadCheck.spread}`);
-              continue;
-            }
-          }
-        } catch (err) {
-          // Non-fatal — if price fetch fails, skip spread check for this cycle
-          console.warn(`[GOLD GUARD] ${symbol}: Spread check skipped (price fetch error): ${err?.message || String(err)}`);
-        }
-
-      }
-
-
-      // ── End Pre-Trade Validation Pipeline ──────────────────────────────────
-
-      // 9. Order Execution via MetaApi
-      const stakeAmount = balance * (RISK_PERCENT / 100);
-      console.log(`🎯 [${symbol}] RR ${rr.toFixed(2)} meets minimum ${MIN_RR}. Maximum risk budget: $${stakeAmount.toFixed(2)}.`);
-
-      const orderResult = await placeOrder({
+      const tradeStatus = await executePatternTrade({
         symbol,
-        amount: stakeAmount,
-        side: pattern.type,
-        sl: pattern.sl,
-        tp: pattern.tp,
-        minimumRR: MIN_RR
+        pattern,
+        history,
+        balance,
+        currentPrice
       });
-
-      if (orderResult) {
-        finalStatus = `🚀 [${symbol}] Action: Executing Trade / Sending Alert | Order ID: ${orderResult.contract_id}`;
-
-        // Record in history.json via async historyLogger (non-blocking)
-        logTradeOpen({
-          patternID,
-          ticketId:      String(orderResult.contract_id),
-          symbol,
-          type:          pattern.type,
-          entryPrice:    orderResult.entryPrice ?? currentPrice,
-          sl:            pattern.sl,
-          tp:            pattern.tp,
-          volume:        orderResult.volume,
-          rr:            rr.toFixed(2),
-          executionTime: new Date().toISOString(),
-        });
-
-        // Keep the synchronous in-memory history array up to date so the
-        // fingerprinting guard (step 4) works correctly within the same cycle.
-        history.push({ patternID, executionTime: new Date().toISOString() });
-      } else {
-        console.error(`❌ [${symbol}] Trade execution failed: MetaApi did not return an order result.`);
-        finalStatus = `❌ [${symbol}] Status: Trade execution failed`;
-      }
+      if (tradeStatus) finalStatus = tradeStatus;
 
     } catch (err) {
       const message = err?.message || String(err);
@@ -286,6 +341,59 @@ async function runTradingCycle() {
       finalStatus = `❌ [${symbol}] Status: Scan skipped due to RPC error`;
     } finally {
       console.log(finalStatus);
+    }
+  }
+}
+
+async function runBreakoutMonitoringCycle() {
+  const pendingStructures = getPendingHourlyStructures();
+  if (pendingStructures.length === 0) return;
+
+  console.log(
+    `\n🔎 [${new Date().toISOString()}] Checking ${pendingStructures.length} armed 1H structure(s) for 15m breakouts...`
+  );
+
+  const history = loadJSON(HISTORY_PATH);
+  const pairIndexes = new Map(BASE_PAIRS.map((symbol, index) => [symbol, index]));
+
+  for (const { symbol } of pendingStructures) {
+    const pairIndex = pairIndexes.get(symbol);
+    if (pairIndex === undefined) {
+      console.error(`❌ [15m Monitor] Ignoring unconfigured monitored symbol: ${symbol}`);
+      continue;
+    }
+
+    try {
+      await ensureMetaApiConnection();
+      const candles = await getCandles(PAIRS[pairIndex], "15m", 2);
+      const latestClosedCandle = (candles || []).find(candle =>
+        Number.isFinite(candle.time) &&
+        candle.time + 15 * 60 * 1000 <= Date.now()
+      );
+      if (!latestClosedCandle) {
+        console.log(`⏳ [${symbol}] 15m monitor waiting: no fully closed 15m candle is available.`);
+        continue;
+      }
+
+      const pattern = checkPendingHourlyBreakout(
+        symbol,
+        latestClosedCandle,
+        getPipSize(symbol) * BREAKOUT_BUFFER_PIPS,
+        MIN_RR
+      );
+      if (!pattern) continue;
+
+      const balance = await getAccountBalance();
+      const tradeStatus = await executePatternTrade({
+        symbol,
+        pattern,
+        history,
+        balance,
+        currentPrice: latestClosedCandle.close
+      });
+      if (tradeStatus) console.log(tradeStatus);
+    } catch (error) {
+      console.error(`❌ [${symbol}] 15m breakout check skipped due to RPC error: ${error?.message || error}`);
     }
   }
 }
@@ -314,6 +422,23 @@ function scheduleNextHourlyScan() {
   }, delayMs);
 }
 
+function scheduleNextBreakoutMonitor() {
+  const now = new Date();
+  const nextCheck = new Date(now);
+  nextCheck.setSeconds(5, 0);
+  nextCheck.setMinutes(Math.floor(now.getMinutes() / 15) * 15 + 15);
+
+  const delayMs = nextCheck.getTime() - now.getTime();
+  setTimeout(async () => {
+    try {
+      await runBreakoutMonitoringCycle();
+    } catch (err) {
+      console.error(`❌ [15m Monitor] Check cycle failed: ${err?.message || err}. Continuing to next check.`);
+    }
+    scheduleNextBreakoutMonitor();
+  }, delayMs);
+}
+
 // Startup Engine
 console.log("🚀 Starting Standalone MetaApi Head & Shoulders Trading Engine (HotForex / Smart Hourly Mode)...");
 
@@ -323,4 +448,5 @@ runTradingCycle()
   })
   .then(() => {
     scheduleNextHourlyScan();
+    scheduleNextBreakoutMonitor();
   });

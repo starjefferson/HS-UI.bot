@@ -415,3 +415,16 @@ export async function getOpenPositions() {
     return [];
   }
 }
+
+/**
+ * Fetch open positions for hard execution limits; unlike getOpenPositions,
+ * account/query failures are propagated so callers can fail closed.
+ */
+export async function getOpenPositionsForSafety() {
+  const { connection } = await ensureSynced();
+  const positions = await connection.getPositions();
+  if (!Array.isArray(positions)) {
+    throw new Error("MetaApi returned an invalid open positions response.");
+  }
+  return positions;
+}
