@@ -87,9 +87,13 @@ async function withOrderLock(task) {
 }
 
 async function executePatternTrade({ symbol, pattern, history, balance, currentPrice }) {
-  const patternID = `${symbol}_${pattern.type}_${pattern.headTime}`;
+  const patternID = `${symbol}_${pattern.type}_${pattern.headTime}` +
+    (Number.isFinite(pattern.breakoutTime) ? `_${pattern.breakoutTime}` : "");
   if (processedPatterns.has(patternID) || history.find(h => h.patternID === patternID)) {
     console.log(`ℹ️ [${symbol}] Pattern ${patternID} already traded or processed.`);
+    if (pattern.structuralTF === "1H") {
+      setHourlyStructureMonitoringState(symbol, pattern.headTime, "pending");
+    }
     return null;
   }
   if (executingPatterns.has(patternID)) {
@@ -145,6 +149,9 @@ async function executePatternTrade({ symbol, pattern, history, balance, currentP
     return await withOrderLock(async () => {
       if (processedPatterns.has(patternID) || history.find(h => h.patternID === patternID)) {
         console.log(`ℹ️ [${symbol}] Pattern ${patternID} already traded or processed.`);
+        if (pattern.structuralTF === "1H") {
+          setHourlyStructureMonitoringState(symbol, pattern.headTime, "pending");
+        }
         return null;
       }
 
@@ -210,7 +217,7 @@ async function executePatternTrade({ symbol, pattern, history, balance, currentP
       history.push({ patternID, executionTime });
       processedPatterns.add(patternID);
       if (pattern.structuralTF === "1H") {
-        setHourlyStructureMonitoringState(symbol, pattern.headTime, "executed");
+        setHourlyStructureMonitoringState(symbol, pattern.headTime, "pending");
       }
       return status;
     });
@@ -365,19 +372,18 @@ async function runBreakoutMonitoringCycle() {
 
     try {
       await ensureMetaApiConnection();
-      const candles = await getCandles(PAIRS[pairIndex], "15m", 2);
-      const latestClosedCandle = (candles || []).find(candle =>
-        Number.isFinite(candle.time) &&
-        candle.time + 15 * 60 * 1000 <= Date.now()
+      const candles = await getCandles(PAIRS[pairIndex], "15m", 200);
+      const closedCandles = (candles || []).filter(candle =>
+        Number.isFinite(candle.time) && candle.time + 15 * 60 * 1000 <= Date.now()
       );
-      if (!latestClosedCandle) {
+      if (closedCandles.length === 0) {
         console.log(`⏳ [${symbol}] 15m monitor waiting: no fully closed 15m candle is available.`);
         continue;
       }
 
       const pattern = checkPendingHourlyBreakout(
         symbol,
-        latestClosedCandle,
+        closedCandles,
         getPipSize(symbol) * BREAKOUT_BUFFER_PIPS,
         MIN_RR
       );
@@ -389,7 +395,7 @@ async function runBreakoutMonitoringCycle() {
         pattern,
         history,
         balance,
-        currentPrice: latestClosedCandle.close
+        currentPrice: pattern.entryPrice
       });
       if (tradeStatus) console.log(tradeStatus);
     } catch (error) {

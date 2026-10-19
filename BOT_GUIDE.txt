@@ -25,7 +25,11 @@ SCAN CYCLE
    then H1; the other structures provide context.
 5. Confirm D1/H4 structure breakouts on H1 during the structural scan.
 6. A separate 15-minute monitor checks only locked, pending H1 structures,
-   using the latest closed M15 candle and the dynamically projected neckline.
+   replaying every newly closed M15 candle since its checkpoint against the
+   dynamically projected neckline. Crossings already present in available
+   candle history are also evaluated instead of being automatically discarded
+   as late entries. A later neckline recross can qualify as a re-entry if the
+   structure remains valid and risk/reward still meets the configured minimum.
 7. Before any order, refresh open positions and refuse execution if the account
    already has five or more open trades. A failed position query also blocks
    execution.
