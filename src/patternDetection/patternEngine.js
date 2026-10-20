@@ -1,5 +1,5 @@
 import { detectPatterns } from "./headShoulders.js";
-import { buildTargetZones, selectTakeProfit } from "./targetSelection.js";
+import { selectTakeProfit } from "./targetSelection.js";
 
 const trackedStructures = new Map();
 const STRUCTURE_MAX_AGE_CANDLES = 24;
@@ -47,7 +47,7 @@ export function pauseHourlyStructureMonitoring(symbol) {
     }
 }
 
-export function checkPendingHourlyBreakout(symbol, closedCandles, breakoutBuffer, minimumRR) {
+export function checkPendingHourlyBreakout(symbol, closedCandles, breakoutBuffer, minimumRR, maximumRR = 4) {
     const setup = trackedStructures.get(`${symbol}:1H`);
     if (!setup || setup.monitoringState !== "pending") return null;
 
@@ -62,7 +62,7 @@ export function checkPendingHourlyBreakout(symbol, closedCandles, breakoutBuffer
         const pending = setup.pendingBreakoutCandle;
         const level = getBreakoutLevel(setup, pending.time + breakoutTFMs, breakoutBuffer);
         const pattern = buildHourlyBreakoutPattern(
-            symbol, setup, pending, level, breakoutBuffer, minimumRR
+            symbol, setup, pending, level, breakoutBuffer, minimumRR, maximumRR
         );
         return pattern;
     }
@@ -96,7 +96,7 @@ export function checkPendingHourlyBreakout(symbol, closedCandles, breakoutBuffer
     return null;
 }
 
-function buildHourlyBreakoutPattern(symbol, setup, candle, breakoutLevel, breakoutBuffer, minimumRR) {
+function buildHourlyBreakoutPattern(symbol, setup, candle, breakoutLevel, breakoutBuffer, minimumRR, maximumRR) {
     const neckline = getNecklineAtTime(
         setup,
         candle.time + BREAKOUT_TF_MILLISECONDS["15m"]
@@ -107,12 +107,12 @@ function buildHourlyBreakoutPattern(symbol, setup, candle, breakoutLevel, breako
         : neckline + setup.measuredMove;
     const risk = setup.type === "sell" ? setup.sl - entryPrice : entryPrice - setup.sl;
     const target = selectTakeProfit({
-        zones: setup.targetZones,
         side: setup.type,
         entryPrice,
         stopLoss: setup.sl,
         measuredMoveTarget,
         minimumRR,
+        maximumRR,
         onDiagnostic: diagnostic => logTargetDiagnostic(symbol, diagnostic)
     });
     const tp = target?.tp;
@@ -121,7 +121,7 @@ function buildHourlyBreakoutPattern(symbol, setup, candle, breakoutLevel, breako
 
     if (!(risk > 0) || !(reward > 0) || !Number.isFinite(rr)) {
         console.log(
-            `❌ [${symbol}] REJECTED: No valid target with minimum RR ${minimumRR} | ` +
+            `❌ [${symbol}] REJECTED: Pattern measured move does not meet RR ${minimumRR}-${maximumRR} | ` +
             `Entry: ${entryPrice} | SL: ${setup.sl} | Measured move: ${measuredMoveTarget} | Risk: ${risk}`
         );
         return null;
@@ -182,7 +182,8 @@ export function runDetection(
     onPatternDetected,
     {
         breakoutBuffer = getPipSize(symbol) * 2,
-        minimumRR = 2.5,
+        minimumRR = 2,
+        maximumRR = 4,
         deferHourlyBreakouts = false,
         excludedStructuralTFs = []
     } = {}
@@ -426,9 +427,7 @@ export function runDetection(
         : detectedSetups["4H"] ? "4H"
         : "1H";
     const structuralSetup = detectedSetups[structuralTF];
-    const targetZones = buildTargetZones(candleData, symbol);
     for (const [timeframe, setup] of Object.entries(detectedSetups)) {
-        setup.targetZones = targetZones;
         setup.structuralTF = timeframe;
     }
     if (structuralTF !== "1H") {
@@ -526,6 +525,7 @@ export function runDetection(
             {
                 breakoutBuffer,
                 minimumRR,
+                maximumRR,
                 deferHourlyBreakouts,
                 excludedStructuralTFs: nextExcludedTFs
             }
@@ -642,12 +642,12 @@ export function runDetection(
         ? necklineAtBreakout - structuralSetup.measuredMove
         : necklineAtBreakout + structuralSetup.measuredMove;
     const target = selectTakeProfit({
-        zones: structuralSetup.targetZones,
         side: structuralSetup.type,
         entryPrice,
         stopLoss: structuralSetup.sl,
         measuredMoveTarget,
         minimumRR,
+        maximumRR,
         onDiagnostic: diagnostic => logTargetDiagnostic(symbol, diagnostic)
     });
     const tp = target?.tp;
@@ -781,12 +781,10 @@ function getPipSize(symbol) {
 }
 
 function logTargetDiagnostic(symbol, diagnostic) {
-    const label = diagnostic.timeframe
-        ? `${diagnostic.timeframe} zone ${diagnostic.price} [${diagnostic.low}-${diagnostic.high}]`
-        : `measured move ${diagnostic.price}`;
+    const label = `pattern measured move ${diagnostic.price}`;
     console.log(
-        `[${symbol}] TP candidate ${label} | RR: ` +
+        `[${symbol}] TP candidate ${label} | TP: ${diagnostic.tp} | RR: ` +
         `${Number.isFinite(diagnostic.rr) ? diagnostic.rr.toFixed(2) : "invalid"} | ` +
-        `${diagnostic.selected ? "SELECTED" : `REJECTED: ${diagnostic.reason}`}`
+        `${diagnostic.selected ? `SELECTED${diagnostic.detail ? ` (${diagnostic.detail})` : ""}` : `REJECTED: ${diagnostic.reason}`}`
     );
 }

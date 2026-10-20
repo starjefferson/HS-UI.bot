@@ -20,7 +20,8 @@ export const config = {
   tradingHours: { start: 0, end: 24 },
 
   // Trade risk and breakout confirmation
-  rrRatio: 2.5,              // Minimum risk-to-reward ratio
+  rrRatio: 2,                // Minimum risk-to-reward ratio
+  maxRR: 4,                  // Cap take-profit distance at four times the risk
   riskPercent: 3.0,           // Maximum account risk per trade
   breakoutBufferPips: 2,      // Closed 1H candle must clear neckline region by this many pips
 };

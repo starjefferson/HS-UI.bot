@@ -41,12 +41,11 @@ SCAN CYCLE
 7. Before any order, refresh open positions and refuse execution if the account
    already has five or more open trades. A failed position query also blocks
    execution.
-8. Select a target from confirmed swing support/resistance zones across W1,
-   D1, H4, and H1 when the target meets the configured minimum RR. Ignore weak
-   intermediate levels but reject targets that cross a strong opposing zone
-   unless a later candle closes beyond the zone's wick edge. Closes identify
-   swing pivots; wick extremes define zone boundaries. Keep the measured move
-   as a fallback only when it independently meets the RR requirement. Apply
+8. Use the pattern's measured move from the breakout neckline as the take-profit
+   target. For moves below 2R, add 0.5R; accept only if the adjusted target
+   reaches 2R. Leave moves already at or above 2R unchanged, and cap targets
+   beyond 4R at 4R. Higher-timeframe support/resistance zones do not override
+   the pattern target. Apply
    pattern fingerprinting, risk/reward, trade-frequency, correlation, and
    gold-specific guards before order submission. Record successful trades in
    `history.json`.

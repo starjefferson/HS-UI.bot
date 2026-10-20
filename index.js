@@ -36,6 +36,7 @@ let orderQueue = Promise.resolve();
 const HISTORY_PATH = "./history.json";
 const RISK_PERCENT = Number(process.env.RISK_PERCENT ?? config.riskPercent);
 const MIN_RR = Number(process.env.MIN_RR ?? config.rrRatio);
+const MAX_RR = config.maxRR;
 const BREAKOUT_BUFFER_PIPS = Number(
   process.env.BREAKOUT_BUFFER_PIPS ?? config.breakoutBufferPips
 );
@@ -43,8 +44,8 @@ const BREAKOUT_BUFFER_PIPS = Number(
 if (!Number.isFinite(RISK_PERCENT) || RISK_PERCENT <= 0 || RISK_PERCENT > config.riskPercent) {
   throw new Error(`RISK_PERCENT must be greater than 0 and no more than ${config.riskPercent}.`);
 }
-if (!Number.isFinite(MIN_RR) || MIN_RR < 2.5) {
-  throw new Error("MIN_RR must be at least 2.5.");
+if (!Number.isFinite(MIN_RR) || MIN_RR < config.rrRatio || MIN_RR > MAX_RR) {
+  throw new Error(`MIN_RR must be between ${config.rrRatio} and ${MAX_RR}.`);
 }
 if (!Number.isFinite(BREAKOUT_BUFFER_PIPS) || BREAKOUT_BUFFER_PIPS < 0) {
   throw new Error("BREAKOUT_BUFFER_PIPS must be a finite non-negative number.");
@@ -315,11 +316,12 @@ async function runTradingCycle() {
         } else if (stage === "invalid-levels") {
           finalStatus = `⏭️ [${symbol}] Status: Scan complete (Invalid trade levels)`;
         } else if (stage === "rr-rejected") {
-          finalStatus = `⏭️ [${symbol}] Status: Scan complete (No safe target meets minimum RR)`;
+          finalStatus = `⏭️ [${symbol}] Status: Scan complete (Pattern measured move does not meet RR range)`;
         }
       }, {
         breakoutBuffer: getPipSize(symbol) * BREAKOUT_BUFFER_PIPS,
         minimumRR: MIN_RR,
+        maximumRR: MAX_RR,
         deferHourlyBreakouts: true
       });
 
@@ -385,7 +387,8 @@ async function runBreakoutMonitoringCycle() {
         symbol,
         closedCandles,
         getPipSize(symbol) * BREAKOUT_BUFFER_PIPS,
-        MIN_RR
+        MIN_RR,
+        MAX_RR
       );
       if (!pattern) continue;
 
