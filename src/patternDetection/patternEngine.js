@@ -112,7 +112,8 @@ function buildHourlyBreakoutPattern(symbol, setup, candle, breakoutLevel, breako
         entryPrice,
         stopLoss: setup.sl,
         measuredMoveTarget,
-        minimumRR
+        minimumRR,
+        onDiagnostic: diagnostic => logTargetDiagnostic(symbol, diagnostic)
     });
     const tp = target?.tp;
     const rr = target?.rr ?? NaN;
@@ -646,7 +647,8 @@ export function runDetection(
         entryPrice,
         stopLoss: structuralSetup.sl,
         measuredMoveTarget,
-        minimumRR
+        minimumRR,
+        onDiagnostic: diagnostic => logTargetDiagnostic(symbol, diagnostic)
     });
     const tp = target?.tp;
     const risk = structuralSetup.type === "sell"
@@ -776,4 +778,15 @@ function getPipSize(symbol) {
     if (symbol.includes("JPY")) return 0.01;
     if (symbol.includes("XAU") || symbol.includes("GOLD")) return 0.01;
     return 0.0001;
+}
+
+function logTargetDiagnostic(symbol, diagnostic) {
+    const label = diagnostic.timeframe
+        ? `${diagnostic.timeframe} zone ${diagnostic.price} [${diagnostic.low}-${diagnostic.high}]`
+        : `measured move ${diagnostic.price}`;
+    console.log(
+        `[${symbol}] TP candidate ${label} | RR: ` +
+        `${Number.isFinite(diagnostic.rr) ? diagnostic.rr.toFixed(2) : "invalid"} | ` +
+        `${diagnostic.selected ? "SELECTED" : `REJECTED: ${diagnostic.reason}`}`
+    );
 }
