@@ -90,10 +90,10 @@ function findHS(candles, type, onDiagnostic, stopBuffer) {
             ? head.val - (leftNeck.val + rightNeck.val) / 2
             : (leftNeck.val + rightNeck.val) / 2 - head.val;
 
-        // Allow ordinary market variation, but reject shallow heads, mismatched
-        // shoulders, and necklines whose two reactions are materially different.
-        if (shoulderDifference > atr * 2) continue;
-        if (necklineDifference > atr * 2) continue;
+        // Allow visibly uneven shoulders and sloped necklines while still
+        // rejecting shapes whose pivot levels are too far apart.
+        if (shoulderDifference > atr * 4) continue;
+        if (necklineDifference > atr * 4) continue;
         if (headProminence < atr * 0.5 || headToNeckline < atr) continue;
 
         const headTime = candles?.[head.idx]?.time ?? head.idx;
