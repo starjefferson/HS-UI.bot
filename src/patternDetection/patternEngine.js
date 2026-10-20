@@ -282,7 +282,7 @@ export function runDetection(
                     );
                 }
             },
-            getPipSize(symbol) * BREAKOUT_BUFFER_PIPS
+            breakoutBuffer
         );
         const currentTracked = trackedStructures.get(trackingKey);
         let selected = currentTracked;
