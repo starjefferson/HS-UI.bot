@@ -16,10 +16,10 @@
  * @param {Function} [onDiagnostic] - Reports geometry and TP/RR evaluation stages
  * @returns {Object|null}
  */
-export function detectPatterns(candles, expectedType, onDiagnostic) {
+export function detectPatterns(candles, expectedType, onDiagnostic, stopBuffer = 0) {
     if (!candles || candles.length < 200) return null;
 
-    return findHS(candles, expectedType, onDiagnostic);
+    return findHS(candles, expectedType, onDiagnostic, stopBuffer);
 }
 
 // ─── Internal Pattern Finder ─────────────────────────────────────────────────
@@ -33,7 +33,7 @@ const MAX_PATTERN_AGE_CANDLES = 24;
  * @param {Function} [onDiagnostic]
  * @returns {Object|null}
  */
-function findHS(candles, type, onDiagnostic) {
+function findHS(candles, type, onDiagnostic, stopBuffer) {
     const radius = 5;
     const pivots = findAlternatingPivots(candles, radius);
     if (pivots.length < 4) return null;
@@ -59,10 +59,10 @@ function findHS(candles, type, onDiagnostic) {
             if (developingCandles.length === 0) continue;
             const extreme = type === "sell"
                 ? developingCandles.reduce((best, candle, index) =>
-                    candle.high > best.val ? { val: candle.high, idx: index } : best,
+                    candle.close > best.val ? { val: candle.close, idx: index } : best,
                 { val: -Infinity, idx: -1 })
                 : developingCandles.reduce((best, candle, index) =>
-                    candle.low < best.val ? { val: candle.low, idx: index } : best,
+                    candle.close < best.val ? { val: candle.close, idx: index } : best,
                 { val: Infinity, idx: -1 });
             if (extreme.idx < 0) continue;
 
@@ -111,10 +111,9 @@ function findHS(candles, type, onDiagnostic) {
         const measuredMove = Math.abs(head.val - necklineMidpoint);
         if (!Number.isFinite(measuredMove) || measuredMove <= 0) continue;
 
-        const slBuffer = atr * 0.25;
         const slPrice = type === "sell"
-            ? rightShoulder.val + slBuffer
-            : rightShoulder.val - slBuffer;
+            ? rightShoulder.val + stopBuffer
+            : rightShoulder.val - stopBuffer;
 
         const pivotDetails = {
             leftShoulderPrice: leftShoulder.val,
@@ -138,8 +137,8 @@ function findHS(candles, type, onDiagnostic) {
         const invalidationCandle = candles
             .slice(0, rightShoulder.idx)
             .find(candle => type === "sell"
-                ? candle.high > head.val
-                : candle.low < head.val);
+                ? candle.close > head.val
+                : candle.close < head.val);
         if (invalidationCandle) {
             onDiagnostic?.({
                 type,
@@ -147,7 +146,7 @@ function findHS(candles, type, onDiagnostic) {
                 headPrice: head.val,
                 headTime,
                 rightShoulderTime,
-                invalidationPrice: type === "sell" ? invalidationCandle.high : invalidationCandle.low,
+                invalidationPrice: invalidationCandle.close,
                 invalidationTime: invalidationCandle.time
             });
             return null;
@@ -192,15 +191,14 @@ function findAlternatingPivots(candles, radius) {
 
     for (let i = radius; i < limit; i++) {
         const window = candles.slice(i - radius, i + radius + 1);
-        const highs = window.map(candle => candle.high);
-        const lows = window.map(candle => candle.low);
-        const isHigh = candles[i].high === Math.max(...highs);
-        const isLow = candles[i].low === Math.min(...lows);
+        const closes = window.map(candle => candle.close);
+        const isHigh = candles[i].close === Math.max(...closes);
+        const isLow = candles[i].close === Math.min(...closes);
 
         if (isHigh === isLow) continue;
         rawPivots.push({
             type: isHigh ? "high" : "low",
-            val: isHigh ? candles[i].high : candles[i].low,
+            val: candles[i].close,
             idx: i
         });
     }
@@ -223,23 +221,16 @@ function findAlternatingPivots(candles, radius) {
 }
 
 function calculatePatternATR(candles, newestIdx, oldestIdx, period = 14) {
-    const trueRanges = [];
+    const closeChanges = [];
     const start = Math.max(newestIdx, 1);
     const end = Math.min(oldestIdx, start + period);
 
     for (let i = start; i < end; i++) {
-        const candle = candles[i];
         const previousClose = candles[i + 1]?.close;
-        const trueRange = Number.isFinite(previousClose)
-            ? Math.max(
-                candle.high - candle.low,
-                Math.abs(candle.high - previousClose),
-                Math.abs(candle.low - previousClose)
-            )
-            : candle.high - candle.low;
-        trueRanges.push(trueRange);
+        const closeChange = Math.abs(candles[i].close - previousClose);
+        if (Number.isFinite(closeChange)) closeChanges.push(closeChange);
     }
 
-    if (trueRanges.length === 0) return NaN;
-    return trueRanges.reduce((sum, value) => sum + value, 0) / trueRanges.length;
+    if (closeChanges.length === 0) return NaN;
+    return closeChanges.reduce((sum, value) => sum + value, 0) / closeChanges.length;
 }

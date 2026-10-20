@@ -19,16 +19,16 @@ export function buildTargetZones(candleData, symbol) {
 
         for (let index = PIVOT_RADIUS; index < candles.length - PIVOT_RADIUS; index++) {
             const candle = candles[index];
-            if (!Number.isFinite(candle.high) || !Number.isFinite(candle.low)) continue;
+            if (!Number.isFinite(candle.close)) continue;
 
             const neighborhood = candles.slice(index - PIVOT_RADIUS, index + PIVOT_RADIUS + 1);
-            const isResistance = neighborhood.every(other => candle.high >= other.high);
-            const isSupport = neighborhood.every(other => candle.low <= other.low);
+            const isResistance = neighborhood.every(other => candle.close >= other.close);
+            const isSupport = neighborhood.every(other => candle.close <= other.close);
             if (isResistance) {
-                levels.push({ side: "buy", price: candle.high, timeframe, weight, atr, index, count: candles.length });
+                levels.push({ side: "buy", price: candle.close, timeframe, weight, atr, index, count: candles.length });
             }
             if (isSupport) {
-                levels.push({ side: "sell", price: candle.low, timeframe, weight, atr, index, count: candles.length });
+                levels.push({ side: "sell", price: candle.close, timeframe, weight, atr, index, count: candles.length });
             }
         }
     }
@@ -168,13 +168,8 @@ function calculateATR(candles) {
     let count = 0;
 
     for (let index = 0; index < sample.length - 1; index++) {
-        const candle = sample[index];
         const previousClose = sample[index + 1].close;
-        const range = Math.max(
-            candle.high - candle.low,
-            Math.abs(candle.high - previousClose),
-            Math.abs(candle.low - previousClose)
-        );
+        const range = Math.abs(sample[index].close - previousClose);
         if (Number.isFinite(range) && range > 0) {
             total += range;
             count++;

@@ -281,7 +281,8 @@ export function runDetection(
                         `(maximum ${maxAgeCandles} ${tf} candles). Older structures will not be considered.`
                     );
                 }
-            }
+            },
+            getPipSize(symbol) * BREAKOUT_BUFFER_PIPS
         );
         const currentTracked = trackedStructures.get(trackingKey);
         let selected = currentTracked;
@@ -357,8 +358,8 @@ export function runDetection(
             const invalidationCandle = candles.find(candle =>
                 candle.time > selected.rightShoulderTime &&
                 (selected.type === "sell"
-                    ? candle.high > selected.headPrice
-                    : candle.low < selected.headPrice)
+                    ? candle.close > selected.headPrice
+                    : candle.close < selected.headPrice)
             );
             if (ageCandles > STRUCTURE_MAX_AGE_CANDLES) {
                 console.log(
@@ -370,7 +371,7 @@ export function runDetection(
             } else if (invalidationCandle) {
                 console.log(
                     `❌ [${symbol}] ${tf} monitored structure invalidated: price ` +
-                    `${selected.type === "sell" ? invalidationCandle.high : invalidationCandle.low} ` +
+                    `${invalidationCandle.close} ` +
                     `crossed the head ${selected.type === "sell" ? "above" : "below"} ` +
                     `${selected.headPrice} on ${new Date(invalidationCandle.time).toISOString()}.`
                 );
@@ -653,14 +654,14 @@ export function runDetection(
 
     const slBreached = candlesSinceBreakout.find(candle =>
         structuralSetup.type === "sell"
-            ? candle.high >= structuralSetup.sl
-            : candle.low <= structuralSetup.sl
+            ? candle.close >= structuralSetup.sl
+            : candle.close <= structuralSetup.sl
     );
     if (slBreached) {
         console.log(
             `❌ [${symbol}] REJECTED: Stop loss was breached after breakout | ` +
             `Candle: ${new Date(slBreached.time).toISOString()} | ` +
-            `Breach price: ${structuralSetup.type === "sell" ? slBreached.high : slBreached.low} | ` +
+            `Breach close: ${slBreached.close} | ` +
             `SL: ${structuralSetup.sl}`
         );
         reportPatternState("invalid-levels");
@@ -669,14 +670,14 @@ export function runDetection(
 
     const tpReached = candlesSinceBreakout.find(candle =>
         structuralSetup.type === "sell"
-            ? candle.low <= tp
-            : candle.high >= tp
+            ? candle.close <= tp
+            : candle.close >= tp
     );
     if (tpReached) {
         console.log(
             `ℹ️ [${symbol}] REJECTED: Selected TP already reached after breakout | ` +
             `Candle: ${new Date(tpReached.time).toISOString()} | ` +
-            `Price: ${structuralSetup.type === "sell" ? tpReached.low : tpReached.high} | ` +
+            `Close: ${tpReached.close} | ` +
             `TP: ${tp}`
         );
         reportPatternState("breakout-missed");

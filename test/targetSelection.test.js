@@ -5,9 +5,9 @@ import { buildTargetZones, selectTakeProfit } from "../src/patternDetection/targ
 test("builds confirmed swing zones from timeframe candles", () => {
     const candles = Array.from({ length: 20 }, (_, index) => ({
         time: 20 - index,
-        high: index === 10 ? 105 : 101,
-        low: 99,
-        close: 100
+        high: index === 10 ? 500 : 101,
+        low: index === 10 ? 1 : 99,
+        close: index === 10 ? 105 : 100
     }));
     const zones = buildTargetZones({ "1D": candles }, "EURUSD");
 
