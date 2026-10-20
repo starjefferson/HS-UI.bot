@@ -182,7 +182,8 @@ export function runDetection(
     {
         breakoutBuffer = getPipSize(symbol) * 2,
         minimumRR = 2.5,
-        deferHourlyBreakouts = false
+        deferHourlyBreakouts = false,
+        excludedStructuralTFs = []
     } = {}
 ) {
     if (expectedBias !== "buy" && expectedBias !== "sell") {
@@ -195,6 +196,7 @@ export function runDetection(
     let detectedSetups  = {};
 
     for (const tf of structuralTFs) {
+        if (excludedStructuralTFs.includes(tf)) continue;
         const candles = candleData[tf];
         if (!candles || candles.length < 200) {
             console.log(
@@ -431,7 +433,7 @@ export function runDetection(
     if (structuralTF !== "1H") {
         const hourlySetup = trackedStructures.get(`${symbol}:1H`);
         if (hourlySetup?.monitoringState === "pending") {
-            hourlySetup.monitoringState = "superseded";
+            hourlySetup.monitoringState = "higher-timeframe-pending";
         }
     }
     const contextNote = acceptedTFs.length > 1
@@ -509,6 +511,25 @@ export function runDetection(
             stage
         });
     };
+    const rejectAndTryNextSetup = (stage) => {
+        reportPatternState(stage);
+        const nextExcludedTFs = [...new Set([...excludedStructuralTFs, structuralTF])];
+        console.log(
+            `↪️ [${symbol}] ${structuralTF} setup ${stage}; checking the next available timeframe setup.`
+        );
+        return runDetection(
+            candleData,
+            symbol,
+            expectedBias,
+            onPatternDetected,
+            {
+                breakoutBuffer,
+                minimumRR,
+                deferHourlyBreakouts,
+                excludedStructuralTFs: nextExcludedTFs
+            }
+        );
+    };
 
     // ── 4. Breakout Trigger — require a fresh candle close across the neckline ─
     // For 1H structural patterns use 15m breakout candles; for 4H/1D use 1H.
@@ -532,8 +553,7 @@ export function runDetection(
             `⏭️ [${symbol}] No entry: the right-shoulder setup predates the available ${breakoutTF} breakout history; ` +
             `whether its first break was missed cannot be verified.`
         );
-        reportPatternState("breakout-history-insufficient");
-        return null;
+        return rejectAndTryNextSetup("breakout-history-insufficient");
     }
 
     let detectedHistoricalCross = false;
@@ -643,8 +663,7 @@ export function runDetection(
             `Entry: ${entryPrice} | SL: ${structuralSetup.sl} | ` +
             `Measured move: ${measuredMoveTarget} | Risk: ${risk}`
         );
-        reportPatternState(risk > 0 ? "rr-rejected" : "invalid-levels");
-        return null;
+        return rejectAndTryNextSetup(risk > 0 ? "rr-rejected" : "invalid-levels");
     }
 
     const breakoutIndex = closedBreakoutCandles.indexOf(lastClosedBreakout);
@@ -664,8 +683,7 @@ export function runDetection(
             `Breach close: ${slBreached.close} | ` +
             `SL: ${structuralSetup.sl}`
         );
-        reportPatternState("invalid-levels");
-        return null;
+        return rejectAndTryNextSetup("invalid-levels");
     }
 
     const tpReached = candlesSinceBreakout.find(candle =>
@@ -680,8 +698,7 @@ export function runDetection(
             `Close: ${tpReached.close} | ` +
             `TP: ${tp}`
         );
-        reportPatternState("breakout-missed");
-        return null;
+        return rejectAndTryNextSetup("breakout-missed");
     }
     // ── 6. Build final setup ──────────────────────────────────────────────────
     reportPatternState("breakout-confirmed", lastClosedBreakout);

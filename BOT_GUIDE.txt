@@ -26,7 +26,11 @@ SCAN CYCLE
    swing zones, stop levels, and historical stop/target checks use candle closes;
    intrabar wicks are ignored for strategy structure. Stops sit two configured
    pips beyond the right-shoulder close; breakout confirmation also uses its
-   configured two-pip neckline buffer.
+   configured two-pip neckline buffer. If a preferred timeframe setup is
+   rejected after locking (for example, invalid RR or missed breakout history),
+   try the next available same-direction timeframe setup. Lower-timeframe
+   structures remain held while a higher-timeframe setup is only waiting for
+   breakout confirmation.
 5. Confirm D1/H4 structure breakouts on H1 during the structural scan.
 6. A separate 15-minute monitor checks only locked, pending H1 structures,
    replaying every newly closed M15 candle since its checkpoint against the
