@@ -1,4 +1,5 @@
 import { detectPatterns } from "./headShoulders.js";
+import { buildTargetZones, selectTakeProfit } from "./targetSelection.js";
 
 const trackedStructures = new Map();
 const STRUCTURE_MAX_AGE_CANDLES = 24;
@@ -101,24 +102,26 @@ function buildHourlyBreakoutPattern(symbol, setup, candle, breakoutLevel, breako
         candle.time + BREAKOUT_TF_MILLISECONDS["15m"]
     );
     const entryPrice = candle.close;
-    const tp = setup.type === "sell"
+    const measuredMoveTarget = setup.type === "sell"
         ? neckline - setup.measuredMove
         : neckline + setup.measuredMove;
     const risk = setup.type === "sell" ? setup.sl - entryPrice : entryPrice - setup.sl;
+    const target = selectTakeProfit({
+        zones: setup.targetZones,
+        side: setup.type,
+        entryPrice,
+        stopLoss: setup.sl,
+        measuredMoveTarget,
+        minimumRR
+    });
+    const tp = target?.tp;
+    const rr = target?.rr ?? NaN;
     const reward = setup.type === "sell" ? entryPrice - tp : tp - entryPrice;
-    const rr = risk > 0 ? reward / risk : NaN;
 
     if (!(risk > 0) || !(reward > 0) || !Number.isFinite(rr)) {
         console.log(
-            `❌ [${symbol}] REJECTED: Invalid measured-move trade levels | ` +
-            `Entry: ${entryPrice} | SL: ${setup.sl} | TP: ${tp} | Risk: ${risk} | Reward: ${reward}`
-        );
-        return null;
-    }
-    if (rr < minimumRR) {
-        console.log(
-            `❌ [${symbol}] REJECTED: Breakout close is overextended; measured-move RR ${rr.toFixed(2)} ` +
-            `is below the ${minimumRR} minimum | Entry: ${entryPrice} | SL: ${setup.sl} | TP: ${tp}.`
+            `❌ [${symbol}] REJECTED: No valid target with minimum RR ${minimumRR} | ` +
+            `Entry: ${entryPrice} | SL: ${setup.sl} | Measured move: ${measuredMoveTarget} | Risk: ${risk}`
         );
         return null;
     }
@@ -128,7 +131,7 @@ function buildHourlyBreakoutPattern(symbol, setup, candle, breakoutLevel, breako
         `✅ [${symbol}] 15m candle crossed the neckline — Structure: 1H | ` +
         `Candle: ${new Date(candle.time).toISOString()} | Entry: ${entryPrice} | ` +
         `Neckline: ${neckline} | Threshold: ${breakoutLevel} | SL: ${setup.sl} | ` +
-        `TP: ${tp} | RR: ${rr.toFixed(2)}`
+        `TP: ${tp} (${target.source}${target.timeframe ? ` ${target.timeframe}` : ""}) | RR: ${rr.toFixed(2)}`
     );
     return {
         type: setup.type,
@@ -136,6 +139,7 @@ function buildHourlyBreakoutPattern(symbol, setup, candle, breakoutLevel, breako
         pair: symbol,
         sl: setup.sl,
         tp,
+        targetSource: target.source,
         entryPrice,
         structuralTF: "1H",
         breakoutTF: "15m",
@@ -418,6 +422,11 @@ export function runDetection(
         : detectedSetups["4H"] ? "4H"
         : "1H";
     const structuralSetup = detectedSetups[structuralTF];
+    const targetZones = buildTargetZones(candleData, symbol);
+    for (const [timeframe, setup] of Object.entries(detectedSetups)) {
+        setup.targetZones = targetZones;
+        setup.structuralTF = timeframe;
+    }
     if (structuralTF !== "1H") {
         const hourlySetup = trackedStructures.get(`${symbol}:1H`);
         if (hourlySetup?.monitoringState === "pending") {
@@ -607,24 +616,33 @@ export function runDetection(
         structuralSetup,
         lastClosedBreakout.time + breakoutTFMs
     );
-    const tp = structuralSetup.type === "sell"
+    const measuredMoveTarget = structuralSetup.type === "sell"
         ? necklineAtBreakout - structuralSetup.measuredMove
         : necklineAtBreakout + structuralSetup.measuredMove;
+    const target = selectTakeProfit({
+        zones: structuralSetup.targetZones,
+        side: structuralSetup.type,
+        entryPrice,
+        stopLoss: structuralSetup.sl,
+        measuredMoveTarget,
+        minimumRR
+    });
+    const tp = target?.tp;
     const risk = structuralSetup.type === "sell"
         ? structuralSetup.sl - entryPrice
         : entryPrice - structuralSetup.sl;
     const reward = structuralSetup.type === "sell"
         ? entryPrice - tp
         : tp - entryPrice;
-    const rr = risk > 0 ? reward / risk : NaN;
+    const rr = target?.rr ?? NaN;
 
     if (!(risk > 0) || !(reward > 0) || !Number.isFinite(rr)) {
         console.log(
-            `❌ [${symbol}] REJECTED: Invalid measured-move trade levels | ` +
-            `Entry: ${entryPrice} | SL: ${structuralSetup.sl} | TP: ${tp} | ` +
-            `Risk: ${risk} | Reward: ${reward}`
+            `❌ [${symbol}] REJECTED: No valid target with minimum RR ${minimumRR} | ` +
+            `Entry: ${entryPrice} | SL: ${structuralSetup.sl} | ` +
+            `Measured move: ${measuredMoveTarget} | Risk: ${risk}`
         );
-        reportPatternState("invalid-levels");
+        reportPatternState(risk > 0 ? "rr-rejected" : "invalid-levels");
         return null;
     }
 
@@ -656,7 +674,7 @@ export function runDetection(
     );
     if (tpReached) {
         console.log(
-            `ℹ️ [${symbol}] REJECTED: Measured-move TP already reached after breakout | ` +
+            `ℹ️ [${symbol}] REJECTED: Selected TP already reached after breakout | ` +
             `Candle: ${new Date(tpReached.time).toISOString()} | ` +
             `Price: ${structuralSetup.type === "sell" ? tpReached.low : tpReached.high} | ` +
             `TP: ${tp}`
@@ -664,21 +682,13 @@ export function runDetection(
         reportPatternState("breakout-missed");
         return null;
     }
-    if (rr < minimumRR) {
-        console.log(
-            `❌ [${symbol}] REJECTED: Breakout close is overextended; measured-move RR ${rr.toFixed(2)} ` +
-            `is below the ${minimumRR} minimum | Entry: ${entryPrice} | SL: ${structuralSetup.sl} | TP: ${tp}.`
-        );
-        reportPatternState("rr-rejected");
-        return null;
-    }
-
     // ── 6. Build final setup ──────────────────────────────────────────────────
     reportPatternState("breakout-confirmed", lastClosedBreakout);
     console.log(
         `✅ [${symbol}] First ${breakoutTF} close beyond sloped neckline by ${breakoutBuffer} — Structure: ${activeTFs.join(" + ")} | ` +
         `Entry/SL/TP source: ${structuralTF} | Breakout TF: ${breakoutTF} | Entry: ${entryPrice} | ` +
-        `SL: ${structuralSetup.sl} | TP: ${tp} | RR: ${rr.toFixed(2)}`
+        `SL: ${structuralSetup.sl} | TP: ${tp} (${target.source}${target.timeframe ? ` ${target.timeframe}` : ""}) | ` +
+        `RR: ${rr.toFixed(2)}`
     );
 
     return {
@@ -687,6 +697,7 @@ export function runDetection(
         pair:         symbol,
         sl:           structuralSetup.sl,
         tp,
+        targetSource: target.source,
         entryPrice,
         structuralTF,
         breakoutTF,

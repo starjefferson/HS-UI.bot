@@ -315,7 +315,7 @@ async function runTradingCycle() {
         } else if (stage === "invalid-levels") {
           finalStatus = `⏭️ [${symbol}] Status: Scan complete (Invalid trade levels)`;
         } else if (stage === "rr-rejected") {
-          finalStatus = `⏭️ [${symbol}] Status: Scan complete (Breakout close below minimum RR)`;
+          finalStatus = `⏭️ [${symbol}] Status: Scan complete (No safe target meets minimum RR)`;
         }
       }, {
         breakoutBuffer: getPipSize(symbol) * BREAKOUT_BUFFER_PIPS,

@@ -33,9 +33,13 @@ SCAN CYCLE
 7. Before any order, refresh open positions and refuse execution if the account
    already has five or more open trades. A failed position query also blocks
    execution.
-8. Apply pattern fingerprinting, risk/reward, trade-frequency, correlation,
-   and gold-specific guards before order submission. Record successful trades
-   in `history.json`.
+8. Select a target from confirmed swing support/resistance zones across W1,
+   D1, H4, and H1 when the target meets the configured minimum RR. Ignore weak
+   intermediate levels but reject targets that cross a strong opposing zone.
+   Keep the measured move as a fallback only when it independently meets the
+   RR requirement. Apply pattern fingerprinting, risk/reward, trade-frequency,
+   correlation, and gold-specific guards before order submission. Record
+   successful trades in `history.json`.
 
 OPERATIONS
 ----------

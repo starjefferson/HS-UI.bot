@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node index.js",
     "start": "node index.js",
+    "test": "node --test",
     "start:prod": "pm2 start pm2.ecosystem.config.cjs",
     "logs": "pm2 logs hs-bot",
     "monitor": "pm2 monit"
