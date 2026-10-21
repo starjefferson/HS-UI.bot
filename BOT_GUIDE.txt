@@ -36,13 +36,14 @@ SCAN CYCLE
    replaying every newly closed M15 candle since its checkpoint against the
    dynamically projected neckline. Crossings already present in available
    candle history are also evaluated instead of being automatically discarded
-   as late entries. A later neckline recross can qualify as a re-entry if the
-   structure remains valid and risk/reward still meets the configured minimum.
+   as late entries. A retry or re-entry is allowed only while candle closes
+   remain on the breakout side of the neckline; any later close back across
+   the neckline invalidates that structure and prevents another entry.
 7. Before any order, refresh open positions and refuse execution if the account
    already has five or more open trades. A failed position query also blocks
    execution.
 8. Use the pattern's measured move from the breakout neckline as the take-profit
-   target. Extend any target below 2.5R to the 2.5R minimum, and cap targets
+   target. Extend any target below 2R to the 2R minimum, and cap targets
    beyond 4R at 4R. Higher-timeframe support/resistance zones do not override
    the pattern target. Apply
    pattern fingerprinting, risk/reward, trade-frequency, correlation, and

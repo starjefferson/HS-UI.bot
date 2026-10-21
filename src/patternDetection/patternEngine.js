@@ -58,8 +58,24 @@ export function checkPendingHourlyBreakout(symbol, closedCandles, breakoutBuffer
     let previousCandle = setup.lastBreakoutCandle;
     if (!previousCandle) return null;
 
+    if (setup.firstBreakoutTime && hasNecklineRecrossAfterBreakout(
+        setup,
+        candles,
+        setup.firstBreakoutTime,
+        breakoutTFMs
+    )) {
+        setup.monitoringState = "neckline-recrossed";
+        setup.pendingBreakoutCandle = null;
+        console.log(
+            `❌ [${symbol}] 1H structure invalidated: a closed 15m candle returned across the neckline ` +
+            `after its first breakout; no re-entry will be taken.`
+        );
+        return null;
+    }
+
     if (setup.pendingBreakoutCandle) {
         const pending = setup.pendingBreakoutCandle;
+        setup.firstBreakoutTime ??= pending.time;
         const level = getBreakoutLevel(setup, pending.time + breakoutTFMs, breakoutBuffer);
         const pattern = buildHourlyBreakoutPattern(
             symbol, setup, pending, level, breakoutBuffer, minimumRR, maximumRR
@@ -83,6 +99,7 @@ export function checkPendingHourlyBreakout(symbol, closedCandles, breakoutBuffer
             )) {
                 setup.lastBreakoutCandle = candle;
                 previousCandle = candle;
+                setup.firstBreakoutTime ??= candle.time;
                 const pattern = buildHourlyBreakoutPattern(
                     symbol, setup, candle, level, breakoutBuffer, minimumRR, maximumRR
                 );
@@ -182,7 +199,7 @@ export function runDetection(
     onPatternDetected,
     {
         breakoutBuffer = getPipSize(symbol) * 2,
-        minimumRR = 2.5,
+        minimumRR = 2,
         maximumRR = 4,
         deferHourlyBreakouts = false,
         excludedStructuralTFs = []
@@ -355,6 +372,12 @@ export function runDetection(
         }
 
         if (selected) {
+            if (selected.monitoringState === "neckline-recrossed") {
+                selected = null;
+            }
+        }
+
+        if (selected) {
             const ageCandles = Math.floor(
                 Math.max(0, candles[0].time - selected.rightShoulderTime) /
                 TIMEFRAME_MILLISECONDS[tf]
@@ -484,6 +507,7 @@ export function runDetection(
                 }
             } else if (stage === "breakout-confirmed" && structuralTF === "1H" && deferHourlyBreakouts) {
                 tracked.monitoringState = "pending";
+                tracked.firstBreakoutTime ??= breakoutCandle?.time;
                 tracked.lastBreakoutCandle = (rawBreakoutCandles || []).find(candle =>
                     Number.isFinite(candle.time) &&
                     candle.time + breakoutTFMs <= Date.now()
@@ -633,6 +657,29 @@ export function runDetection(
         return null;
     }
 
+    const trackedBreakout = trackedStructures.get(`${symbol}:${structuralTF}`);
+    if (trackedBreakout?.headTime === structuralSetup.headTime) {
+        trackedBreakout.firstBreakoutTime ??= lastClosedBreakout.time;
+    }
+
+    const firstBreakoutTime = structuralSetup.firstBreakoutTime ?? lastClosedBreakout.time;
+    const candlesSinceBreakout = closedBreakoutCandles.filter(candle =>
+        candle.time >= firstBreakoutTime
+    );
+
+    if (hasNecklineRecrossAfterBreakout(
+        structuralSetup,
+        candlesSinceBreakout,
+        lastClosedBreakout.time,
+        breakoutTFMs
+    )) {
+        console.log(
+            `❌ [${symbol}] ${structuralTF} structure invalidated: a closed ${breakoutTF} candle ` +
+            `returned across the neckline after its first breakout; no re-entry will be taken.`
+        );
+        return rejectAndTryNextSetup("neckline-recrossed");
+    }
+
     const entryPrice = lastClosedBreakout.close;
     const necklineAtBreakout = getNecklineAtTime(
         structuralSetup,
@@ -667,11 +714,6 @@ export function runDetection(
         );
         return rejectAndTryNextSetup(risk > 0 ? "rr-rejected" : "invalid-levels");
     }
-
-    const breakoutIndex = closedBreakoutCandles.indexOf(lastClosedBreakout);
-    const candlesSinceBreakout = breakoutIndex >= 0
-        ? closedBreakoutCandles.slice(0, breakoutIndex + 1)
-        : [lastClosedBreakout];
 
     const slBreached = candlesSinceBreakout.find(candle =>
         structuralSetup.type === "sell"
@@ -748,6 +790,17 @@ function checkNecklineBreakout(previousClose, latestClose, previousBoundary, lat
 
 function isBeyondNeckline(close, boundary, type) {
     return type === "sell" ? close < boundary : close > boundary;
+}
+
+export function hasNecklineRecrossAfterBreakout(setup, candles, breakoutTime, timeframeMs) {
+    return candles.some(candle =>
+        candle.time > breakoutTime &&
+        !isBeyondNeckline(
+            candle.close,
+            getNecklineAtTime(setup, candle.time + timeframeMs),
+            setup.type
+        )
+    );
 }
 
 function getBreakoutLevel(setup, time, breakoutBuffer) {

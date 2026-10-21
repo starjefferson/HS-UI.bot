@@ -317,6 +317,8 @@ async function runTradingCycle() {
           finalStatus = `⏭️ [${symbol}] Status: Scan complete (Invalid trade levels)`;
         } else if (stage === "rr-rejected") {
           finalStatus = `⏭️ [${symbol}] Status: Scan complete (No valid target meets the RR requirements)`;
+        } else if (stage === "neckline-recrossed") {
+          finalStatus = `⏭️ [${symbol}] Status: Scan complete (Breakout invalidated after neckline recross)`;
         }
       }, {
         breakoutBuffer: getPipSize(symbol) * BREAKOUT_BUFFER_PIPS,
