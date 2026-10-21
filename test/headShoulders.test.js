@@ -47,24 +47,26 @@ test("accepts a BUY structure with uneven shoulders and a sloped neckline", () =
         [190, 100.5],
         [199, 108]
     ];
-    const chronologicalCloses = Array.from({ length: 200 }, (_, index) => {
-        const nextPointIndex = turningPoints.findIndex(([time]) => time >= index);
-        const [startTime, startPrice] = turningPoints[nextPointIndex - 1] || turningPoints[0];
-        const [endTime, endPrice] = turningPoints[nextPointIndex] || turningPoints.at(-1);
-        const progress = (index - startTime) / (endTime - startTime);
-        return startPrice + (endPrice - startPrice) * progress;
-    });
-    for (const [index, close] of turningPoints) chronologicalCloses[index] = close;
-
-    const candles = chronologicalCloses
-        .map((close, index) => ({
-            time: 2000 + index,
-            open: close,
-            close,
-            high: close + 20,
-            low: close - 20
-        }))
-        .reverse();
+    const buildCandles = points => {
+        const chronologicalCloses = Array.from({ length: 200 }, (_, index) => {
+            const nextPointIndex = points.findIndex(([time]) => time >= index);
+            const [startTime, startPrice] = points[nextPointIndex - 1] || points[0];
+            const [endTime, endPrice] = points[nextPointIndex] || points.at(-1);
+            const progress = (index - startTime) / (endTime - startTime);
+            return startPrice + (endPrice - startPrice) * progress;
+        });
+        for (const [index, close] of points) chronologicalCloses[index] = close;
+        return chronologicalCloses
+            .map((close, index) => ({
+                time: 2000 + index,
+                open: close,
+                close,
+                high: close + 20,
+                low: close - 20
+            }))
+            .reverse();
+    };
+    const candles = buildCandles(turningPoints);
 
     const setup = detectPatterns(candles, "buy");
 
@@ -73,4 +75,8 @@ test("accepts a BUY structure with uneven shoulders and a sloped neckline", () =
     assert.equal(setup.rightShoulderPrice, 100.5);
     assert.equal(setup.necklineStartPrice, 110);
     assert.equal(setup.necklineEndPrice, 113.3);
+
+    const weakHead = turningPoints.map(point => [...point]);
+    weakHead.find(([time]) => time === 160)[1] = 100.2;
+    assert.equal(detectPatterns(buildCandles(weakHead), "buy"), null);
 });

@@ -3,6 +3,7 @@ export function selectTakeProfit({
     entryPrice,
     stopLoss,
     measuredMoveTarget,
+    plannedEntryPrice = entryPrice,
     minimumRR,
     maximumRR,
     onDiagnostic
@@ -18,10 +19,17 @@ export function selectTakeProfit({
         maximumRR < minimumRR
     ) return null;
 
+    const plannedRisk = side === "buy"
+        ? plannedEntryPrice - stopLoss
+        : stopLoss - plannedEntryPrice;
+    if (!(plannedRisk > 0) || !Number.isFinite(plannedRisk) || !Number.isFinite(plannedEntryPrice)) {
+        return null;
+    }
+
     const measuredReward = side === "buy"
-        ? measuredMoveTarget - entryPrice
-        : entryPrice - measuredMoveTarget;
-    const measuredRR = measuredReward / risk;
+        ? measuredMoveTarget - plannedEntryPrice
+        : plannedEntryPrice - measuredMoveTarget;
+    const measuredRR = measuredReward / plannedRisk;
     let reason = null;
 
     if (!Number.isFinite(measuredMoveTarget) || !Number.isFinite(measuredRR)) {
@@ -44,11 +52,12 @@ export function selectTakeProfit({
     const adjustedRR = Math.max(measuredRR, minimumRR);
     const capped = adjustedRR > maximumRR;
     const tp = capped
-        ? entryPrice + (side === "buy" ? 1 : -1) * risk * maximumRR
+        ? plannedEntryPrice + (side === "buy" ? 1 : -1) * plannedRisk * maximumRR
         : extended
-            ? entryPrice + (side === "buy" ? 1 : -1) * risk * minimumRR
+            ? plannedEntryPrice + (side === "buy" ? 1 : -1) * plannedRisk * minimumRR
             : measuredMoveTarget;
     const rr = Math.min(adjustedRR, maximumRR);
+    const actualRR = (side === "buy" ? tp - entryPrice : entryPrice - tp) / risk;
     const details = [];
     if (extended) details.push(`extended ${measuredRR.toFixed(2)}R move to minimum ${minimumRR}R`);
     if (capped) details.push(`capped at maximum ${maximumRR}R`);
@@ -57,6 +66,7 @@ export function selectTakeProfit({
         price: measuredMoveTarget,
         tp,
         rr,
+        actualRR,
         selected: true,
         detail: details.length > 0 ? details.join("; ") : null
     });
@@ -64,6 +74,7 @@ export function selectTakeProfit({
     return {
         tp,
         rr,
+        actualRR,
         source: "measured move",
         timeframe: null,
         level: measuredMoveTarget

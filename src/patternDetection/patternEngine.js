@@ -128,15 +128,16 @@ function buildHourlyBreakoutPattern(symbol, setup, candle, breakoutLevel, breako
         entryPrice,
         stopLoss: setup.sl,
         measuredMoveTarget,
+        plannedEntryPrice: breakoutLevel,
         minimumRR,
         maximumRR,
         onDiagnostic: diagnostic => logTargetDiagnostic(symbol, diagnostic)
     });
     const tp = target?.tp;
-    const rr = target?.rr ?? NaN;
+    const rr = target?.actualRR ?? NaN;
     const reward = setup.type === "sell" ? entryPrice - tp : tp - entryPrice;
 
-    if (!(risk > 0) || !(reward > 0) || !Number.isFinite(rr)) {
+    if (!(risk > 0) || !(reward > 0) || !Number.isFinite(rr) || rr < minimumRR) {
         console.log(
             `❌ [${symbol}] REJECTED: Pattern measured move does not meet RR ${minimumRR}-${maximumRR} | ` +
             `Entry: ${entryPrice} | SL: ${setup.sl} | Measured move: ${measuredMoveTarget} | Risk: ${risk}`
@@ -693,6 +694,7 @@ export function runDetection(
         entryPrice,
         stopLoss: structuralSetup.sl,
         measuredMoveTarget,
+        plannedEntryPrice: breakoutLevel,
         minimumRR,
         maximumRR,
         onDiagnostic: diagnostic => logTargetDiagnostic(symbol, diagnostic)
@@ -704,9 +706,9 @@ export function runDetection(
     const reward = structuralSetup.type === "sell"
         ? entryPrice - tp
         : tp - entryPrice;
-    const rr = target?.rr ?? NaN;
+    const rr = target?.actualRR ?? NaN;
 
-    if (!(risk > 0) || !(reward > 0) || !Number.isFinite(rr)) {
+    if (!(risk > 0) || !(reward > 0) || !Number.isFinite(rr) || rr < minimumRR) {
         console.log(
             `❌ [${symbol}] REJECTED: No valid target with minimum RR ${minimumRR} | ` +
             `Entry: ${entryPrice} | SL: ${structuralSetup.sl} | ` +
