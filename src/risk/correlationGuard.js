@@ -32,7 +32,7 @@ const SYMBOL_OVERRIDES = {
  * Extracts the base and quote currency from a trading symbol.
  *
  * Standard 6-character FX pairs split at position 3 (e.g. EURUSD -> EUR, USD).
- * Exotic suffixes like ".a" or ".m" (ECN/mini) are stripped before parsing.
+ * Broker suffixes like "r", ".a", or ".m" (ECN/mini) are stripped before parsing.
  * Special instruments (XAUUSD, GOLD, etc.) are resolved via SYMBOL_OVERRIDES.
  *
  * @param {string} symbol - Trading symbol (e.g. "EURUSD", "XAUUSD", "USDZAR")
@@ -49,8 +49,8 @@ export function parseCurrencies(symbol) {
     return SYMBOL_OVERRIDES[normalized];
   }
 
-  // Strip common broker-specific suffixes (.a, .m, .ecn, .pro, etc.)
-  const stripped = normalized.replace(/\.[A-Z0-9]+$/, "");
+  // Strip common broker-specific suffixes, including HotForex's trailing "r".
+  const stripped = normalized.replace(/\.[A-Z0-9]+$/, "").replace(/R$/, "");
 
   // Standard 6-character FX pair (most majors, minors, exotics)
   if (stripped.length === 6) {
