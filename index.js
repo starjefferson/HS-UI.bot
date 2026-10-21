@@ -316,7 +316,7 @@ async function runTradingCycle() {
         } else if (stage === "invalid-levels") {
           finalStatus = `⏭️ [${symbol}] Status: Scan complete (Invalid trade levels)`;
         } else if (stage === "rr-rejected") {
-          finalStatus = `⏭️ [${symbol}] Status: Scan complete (Pattern measured move does not meet RR range)`;
+          finalStatus = `⏭️ [${symbol}] Status: Scan complete (No valid target meets the RR requirements)`;
         }
       }, {
         breakoutBuffer: getPipSize(symbol) * BREAKOUT_BUFFER_PIPS,

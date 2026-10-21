@@ -182,7 +182,7 @@ export function runDetection(
     onPatternDetected,
     {
         breakoutBuffer = getPipSize(symbol) * 2,
-        minimumRR = 2,
+        minimumRR = 2.5,
         maximumRR = 4,
         deferHourlyBreakouts = false,
         excludedStructuralTFs = []

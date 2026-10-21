@@ -8,7 +8,7 @@ test("uses the measured move when its reward-to-risk is within the configured ra
         entryPrice: 100,
         stopLoss: 105,
         measuredMoveTarget: 87,
-        minimumRR: 2,
+        minimumRR: 2.5,
         maximumRR: 4
     });
 
@@ -23,7 +23,7 @@ test("caps a buy measured move at four times the risk", () => {
         entryPrice: 100,
         stopLoss: 95,
         measuredMoveTarget: 125,
-        minimumRR: 2,
+        minimumRR: 2.5,
         maximumRR: 4
     });
 
@@ -37,7 +37,7 @@ test("caps a sell measured move at four times the risk", () => {
         entryPrice: 100,
         stopLoss: 102,
         measuredMoveTarget: 90,
-        minimumRR: 2,
+        minimumRR: 2.5,
         maximumRR: 4
     });
 
@@ -45,31 +45,32 @@ test("caps a sell measured move at four times the risk", () => {
     assert.equal(target.rr, 4);
 });
 
-test("adds 0.5R to a sub-2R measured move when the adjusted target reaches 2R", () => {
+test("extends a sub-2.5R measured move to the 2.5R minimum", () => {
     const target = selectTakeProfit({
         side: "buy",
         entryPrice: 100,
         stopLoss: 95,
-        measuredMoveTarget: 109,
-        minimumRR: 2,
+        measuredMoveTarget: 110,
+        minimumRR: 2.5,
         maximumRR: 4
     });
 
-    assert.equal(target.tp, 111.5);
-    assert.equal(target.rr, 2.3);
+    assert.equal(target.tp, 112.5);
+    assert.equal(target.rr, 2.5);
 });
 
-test("rejects a sub-2R move when the 0.5R extension still falls short", () => {
+test("extends a measured move far below the minimum rather than rejecting the pattern", () => {
     const target = selectTakeProfit({
         side: "sell",
         entryPrice: 100,
         stopLoss: 105,
-        measuredMoveTarget: 93,
-        minimumRR: 2,
+        measuredMoveTarget: 98,
+        minimumRR: 2.5,
         maximumRR: 4
     });
 
-    assert.equal(target, null);
+    assert.equal(target.tp, 87.5);
+    assert.equal(target.rr, 2.5);
 });
 
 test("leaves measured moves at or above the minimum unchanged", () => {
@@ -77,44 +78,47 @@ test("leaves measured moves at or above the minimum unchanged", () => {
         side: "sell",
         entryPrice: 100,
         stopLoss: 105,
-        measuredMoveTarget: 90,
-        minimumRR: 2,
+        measuredMoveTarget: 85,
+        minimumRR: 2.5,
         maximumRR: 4
     });
 
-    assert.equal(target.tp, 90);
-    assert.equal(target.rr, 2);
+    assert.equal(target.tp, 85);
+    assert.equal(target.rr, 3);
 });
 
-test("caps an extended measured move at the four-R maximum", () => {
+test("caps a measured move at the configured maximum", () => {
     const target = selectTakeProfit({
         side: "buy",
         entryPrice: 100,
         stopLoss: 95,
-        measuredMoveTarget: 109,
-        minimumRR: 2,
-        maximumRR: 2.2
+        measuredMoveTarget: 120,
+        minimumRR: 2.5,
+        maximumRR: 3
     });
 
-    assert.equal(target.tp, 111);
-    assert.equal(target.rr, 2.2);
+    assert.equal(target.tp, 115);
+    assert.equal(target.rr, 3);
 });
 
-test("rejects a measured move on the wrong side of entry or invalid risk", () => {
-    assert.equal(selectTakeProfit({
+test("extends a measured move on the wrong side of entry and rejects invalid risk", () => {
+    const target = selectTakeProfit({
         side: "sell",
         entryPrice: 100,
         stopLoss: 105,
         measuredMoveTarget: 101,
-        minimumRR: 2,
+        minimumRR: 2.5,
         maximumRR: 4
-    }), null);
+    });
+    assert.equal(target.tp, 87.5);
+    assert.equal(target.rr, 2.5);
+
     assert.equal(selectTakeProfit({
         side: "buy",
         entryPrice: 100,
         stopLoss: 101,
         measuredMoveTarget: 115,
-        minimumRR: 2,
+        minimumRR: 2.5,
         maximumRR: 4
     }), null);
 });

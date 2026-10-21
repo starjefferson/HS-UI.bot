@@ -7,7 +7,6 @@ export function selectTakeProfit({
     maximumRR,
     onDiagnostic
 }) {
-    const measuredMoveBufferRR = 0.5;
     const risk = side === "buy" ? entryPrice - stopLoss : stopLoss - entryPrice;
     if (
         !["buy", "sell"].includes(side) ||
@@ -25,8 +24,8 @@ export function selectTakeProfit({
     const measuredRR = measuredReward / risk;
     let reason = null;
 
-    if (!(measuredReward > 0) || !Number.isFinite(measuredRR)) {
-        reason = "measured-move target is not beyond entry";
+    if (!Number.isFinite(measuredMoveTarget) || !Number.isFinite(measuredRR)) {
+        reason = "measured-move target is invalid";
     }
 
     if (reason) {
@@ -42,29 +41,16 @@ export function selectTakeProfit({
     }
 
     const extended = measuredRR < minimumRR;
-    const adjustedRR = measuredRR + (extended ? measuredMoveBufferRR : 0);
-    if (adjustedRR < minimumRR) {
-        onDiagnostic?.({
-            timeframe: null,
-            price: measuredMoveTarget,
-            tp: measuredMoveTarget,
-            rr: adjustedRR,
-            selected: false,
-            reason:
-                `measured-move RR ${measuredRR.toFixed(2)} plus ${measuredMoveBufferRR.toFixed(2)}R ` +
-                `buffer is below minimum ${minimumRR}`
-        });
-        return null;
-    }
-
+    const adjustedRR = Math.max(measuredRR, minimumRR);
     const capped = adjustedRR > maximumRR;
     const tp = capped
         ? entryPrice + (side === "buy" ? 1 : -1) * risk * maximumRR
-        : measuredMoveTarget + (side === "buy" ? 1 : -1) *
-            risk * (extended ? measuredMoveBufferRR : 0);
+        : extended
+            ? entryPrice + (side === "buy" ? 1 : -1) * risk * minimumRR
+            : measuredMoveTarget;
     const rr = Math.min(adjustedRR, maximumRR);
     const details = [];
-    if (extended) details.push(`extended ${measuredRR.toFixed(2)}R move by ${measuredMoveBufferRR.toFixed(2)}R`);
+    if (extended) details.push(`extended ${measuredRR.toFixed(2)}R move to minimum ${minimumRR}R`);
     if (capped) details.push(`capped at maximum ${maximumRR}R`);
     onDiagnostic?.({
         timeframe: null,
