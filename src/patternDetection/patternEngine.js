@@ -84,7 +84,7 @@ export function checkPendingHourlyBreakout(symbol, closedCandles, breakoutBuffer
                 setup.lastBreakoutCandle = candle;
                 previousCandle = candle;
                 const pattern = buildHourlyBreakoutPattern(
-                    symbol, setup, candle, level, breakoutBuffer, minimumRR
+                    symbol, setup, candle, level, breakoutBuffer, minimumRR, maximumRR
                 );
                 if (pattern) return pattern;
                 continue;
