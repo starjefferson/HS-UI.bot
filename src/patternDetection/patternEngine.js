@@ -2,7 +2,7 @@ import { detectPatterns } from "./headShoulders.js";
 import { selectTakeProfit } from "./targetSelection.js";
 
 const trackedStructures = new Map();
-const STRUCTURE_MAX_AGE_CANDLES = 24;
+const STRUCTURE_MAX_AGE_CANDLES = 168;
 const TIMEFRAME_MILLISECONDS = {
     "1H": 1 * 60 * 60 * 1000,
     "4H": 4 * 60 * 60 * 1000,
@@ -445,14 +445,19 @@ export function runDetection(
         return null;
     }
 
-    // Higher timeframes own levels when multiple structures agree.
-    // Priority: 1D > 4H > 1H.
-    const structuralTF = detectedSetups["1D"] ? "1D"
-        : detectedSetups["4H"] ? "4H"
-        : "1H";
+    const activeTFs = Object.keys(detectedSetups);
+    const structuralTF = activeTFs.length > 1
+        ? pickEarliestBreakoutTF(activeTFs, detectedSetups, candleData, breakoutBuffer)
+        : activeTFs[0];
     const structuralSetup = detectedSetups[structuralTF];
     for (const [timeframe, setup] of Object.entries(detectedSetups)) {
         setup.structuralTF = timeframe;
+    }
+    if (activeTFs.length > 1) {
+        console.log(
+            `[${symbol}] Multi-TF setup confirmed (${activeTFs.join(" + ")}); no timeframe is preferred. ` +
+            `Monitoring all accepted structures; the first neckline breakout across the set will trigger the trade.`
+        );
     }
     if (structuralTF !== "1H") {
         const hourlySetup = trackedStructures.get(`${symbol}:1H`);
@@ -460,8 +465,8 @@ export function runDetection(
             hourlySetup.monitoringState = "higher-timeframe-pending";
         }
     }
-    const contextNote = acceptedTFs.length > 1
-        ? `; ${acceptedTFs.filter(tf => tf !== structuralTF).join(" + ")} provide context only`
+    const contextNote = activeTFs.length > 1
+        ? `; monitoring ${activeTFs.join(" + ")}; first neckline break wins`
         : "";
     console.log(
         `[${symbol}] Selected ${structuralTF} ${structuralSetup.type.toUpperCase()} structure for entry/SL/TP levels${contextNote}. ` +
@@ -477,7 +482,6 @@ export function runDetection(
         return null;
     }
 
-    const activeTFs = Object.keys(detectedSetups);
     const reportPatternState = (stage, breakoutCandle = null) => {
         const tracked = trackedStructures.get(`${symbol}:${structuralTF}`);
         if (tracked?.headTime === structuralSetup.headTime) {
@@ -783,6 +787,42 @@ export function runDetection(
  * A breakout requires a candle close beyond the far edge of the neckline region.
  * Works for any breakout timeframe (1H for 4H/1D structures, 15m for 1H structures).
  */
+function pickEarliestBreakoutTF(activeTFs, detectedSetups, candleData, breakoutBuffer) {
+    const candidates = activeTFs
+        .map(tf => {
+            const setup = detectedSetups[tf];
+            const breakoutTF = BREAKOUT_TF_FOR_STRUCTURAL[tf] ?? "1H";
+            const breakoutTFMs = BREAKOUT_TF_MILLISECONDS[breakoutTF] ?? BREAKOUT_TF_MILLISECONDS["1H"];
+            const candles = (candleData[breakoutTF] || [])
+                .filter(candle => Number.isFinite(candle.time) && candle.time + breakoutTFMs <= Date.now())
+                .slice(0, 200);
+            if (candles.length < 2) return { tf, breakoutTime: Number.POSITIVE_INFINITY };
+
+            for (let index = candles.length - 2; index >= 0; index--) {
+                const newer = candles[index];
+                const older = candles[index + 1];
+                if (newer.time < setup.rightShoulderTime) continue;
+                const olderLevel = getBreakoutLevel(setup, older.time + breakoutTFMs, breakoutBuffer);
+                const newerLevel = getBreakoutLevel(setup, newer.time + breakoutTFMs, breakoutBuffer);
+                if (checkNecklineBreakout(
+                    older.close,
+                    newer.close,
+                    olderLevel,
+                    newerLevel,
+                    setup.type
+                )) {
+                    return { tf, breakoutTime: newer.time };
+                }
+            }
+
+            return { tf, breakoutTime: Number.POSITIVE_INFINITY };
+        })
+        .filter(candidate => Number.isFinite(candidate.breakoutTime));
+
+    const earliest = candidates.sort((a, b) => a.breakoutTime - b.breakoutTime)[0];
+    return earliest?.tf || activeTFs[0];
+}
+
 function checkNecklineBreakout(previousClose, latestClose, previousBoundary, latestBoundary, type) {
     if (type === "sell") {
         return previousClose >= previousBoundary && latestClose < latestBoundary;

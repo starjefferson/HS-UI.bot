@@ -23,7 +23,7 @@ export function detectPatterns(candles, expectedType, onDiagnostic, stopBuffer =
 }
 
 // ─── Internal Pattern Finder ─────────────────────────────────────────────────
-const MAX_PATTERN_AGE_CANDLES = 24;
+const MAX_PATTERN_AGE_CANDLES = 168;
 
 /**
  * Core H&S / Inverted H&S structural finder.
