@@ -1,3 +1,5 @@
+const FALLBACK_TARGET_RR = 2.2;
+
 export function selectTakeProfit({
     side,
     entryPrice,
@@ -33,8 +35,9 @@ export function selectTakeProfit({
     }
 
     const extended = measuredRR < minimumRR;
+    const fallbackRR = Math.max(minimumRR, FALLBACK_TARGET_RR);
     const tp = extended
-        ? entryPrice + (side === "buy" ? 1 : -1) * risk * minimumRR
+        ? entryPrice + (side === "buy" ? 1 : -1) * risk * fallbackRR
         : measuredMoveTarget;
     const actualRR = (side === "buy" ? tp - entryPrice : entryPrice - tp) / risk;
     onDiagnostic?.({
@@ -45,7 +48,7 @@ export function selectTakeProfit({
         actualRR,
         selected: true,
         detail: extended
-            ? `set target from ${measuredRR.toFixed(2)}R move to minimum ${minimumRR}R`
+            ? `set target from ${measuredRR.toFixed(2)}R move to ${fallbackRR}R fallback`
             : null
     });
 

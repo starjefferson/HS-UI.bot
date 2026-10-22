@@ -73,11 +73,16 @@ TRADING AND MONITORING
   the environment, subject to startup validation.
 - Trend alignment is checked on W1, D1, H4, and H1. Structural patterns are
   checked on D1, H4, and H1. When multiple same-direction patterns qualify,
-  the smallest timeframe supplies the right-shoulder stop and the largest
-  supplies the measured-move target; the first neckline breakout triggers the
-  trade. Conflicting directions are rejected.
+  the first neckline breakout triggers the trade using that timeframe's own
+  right-shoulder stop and measured-move target. Levels are not mixed across
+  timeframes. Conflicting directions are rejected.
 - H1 structures use M15 candles for breakout confirmation; D1/H4 structures
   use H1 candles.
+- Take-profit is calculated from the confirmed breakout candle close. Natural
+  measured-move targets that meet the configured minimum RR remain unchanged;
+  if the natural move is below minimum, the fallback target is at least 2.2R
+  (or the configured minimum when higher). The target stays fixed, and an order
+  is rejected if the live quote no longer meets the configured minimum RR.
 - Review scan output and verify the selected account, symbols, and position
   sizing before running with live funds. Trading involves financial risk.
 

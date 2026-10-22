@@ -8,8 +8,6 @@ const TIMEFRAME_MILLISECONDS = {
     "4H": 4 * 60 * 60 * 1000,
     "1D": 24 * 60 * 60 * 1000
 };
-const STRUCTURAL_TIMEFRAMES = ["1H", "4H", "1D"];
-
 // Breakout confirmation timeframe per structural timeframe.
 // 1H patterns use 15m candles; all higher-TF patterns continue to use 1H.
 const BREAKOUT_TF_FOR_STRUCTURAL = {
@@ -46,38 +44,6 @@ export function pauseHourlyStructureMonitoring(symbol) {
     if (setup?.monitoringState === "pending") {
         setup.monitoringState = "bias-unavailable";
     }
-}
-
-export function selectAlignedLevelSetups(activeTFs, detectedSetups, breakoutTime = Infinity) {
-    const timeframes = STRUCTURAL_TIMEFRAMES.filter(tf =>
-        activeTFs.includes(tf) &&
-        detectedSetups[tf] &&
-        (!Number.isFinite(detectedSetups[tf].rightShoulderTime) ||
-            detectedSetups[tf].rightShoulderTime <= breakoutTime)
-    );
-    if (timeframes.length === 0) return null;
-
-    const stopTimeframe = timeframes[0];
-    const targetTimeframe = timeframes.at(-1);
-    return {
-        stopTimeframe,
-        stopSetup: detectedSetups[stopTimeframe],
-        targetTimeframe,
-        targetSetup: detectedSetups[targetTimeframe]
-    };
-}
-
-function getLevelSetupSnapshot(timeframe, setup) {
-    return {
-        timeframe,
-        sl: setup.sl,
-        rightShoulderTime: setup.rightShoulderTime,
-        necklineStartTime: setup.necklineStartTime,
-        necklineEndTime: setup.necklineEndTime,
-        necklineStartPrice: setup.necklineStartPrice,
-        necklineEndPrice: setup.necklineEndPrice,
-        measuredMove: setup.measuredMove
-    };
 }
 
 export function checkPendingHourlyBreakout(symbol, closedCandles, breakoutBuffer, minimumRR) {
@@ -147,28 +113,15 @@ export function checkPendingHourlyBreakout(symbol, closedCandles, breakoutBuffer
 }
 
 function buildHourlyBreakoutPattern(symbol, setup, candle, breakoutLevel, minimumRR) {
-    const alignedStructures = setup.alignedSetups;
-    const alignedLevels = alignedStructures
-        ? selectAlignedLevelSetups(
-            Object.keys(alignedStructures),
-            alignedStructures,
-            candle.time
-        )
-        : null;
-    const stopLoss = alignedLevels?.stopSetup.sl ?? setup.sl;
-    const targetSetup = alignedLevels?.targetSetup ?? setup;
-    const neckline = getNecklineAtTime(
-        targetSetup,
-        candle.time + BREAKOUT_TF_MILLISECONDS["15m"]
-    );
-    const entryPrice = candle.close;
+    const stopLoss = setup.sl;
     const breakoutNeckline = getNecklineAtTime(
         setup,
         candle.time + BREAKOUT_TF_MILLISECONDS["15m"]
     );
+    const entryPrice = candle.close;
     const measuredMoveTarget = setup.type === "sell"
-        ? neckline - targetSetup.measuredMove
-        : neckline + targetSetup.measuredMove;
+        ? breakoutNeckline - setup.measuredMove
+        : breakoutNeckline + setup.measuredMove;
     const risk = setup.type === "sell" ? stopLoss - entryPrice : entryPrice - stopLoss;
     const target = selectTakeProfit({
         side: setup.type,
@@ -194,21 +147,19 @@ function buildHourlyBreakoutPattern(symbol, setup, candle, breakoutLevel, minimu
     console.log(
         `✅ [${symbol}] 15m candle crossed the neckline — Structure: 1H | ` +
         `Candle: ${new Date(candle.time).toISOString()} | Entry: ${entryPrice} | ` +
-        `Breakout neckline: ${breakoutNeckline} | TP neckline: ${neckline} | ` +
+        `Breakout neckline: ${breakoutNeckline} | ` +
         `Threshold: ${breakoutLevel} | SL: ${stopLoss} | ` +
-        `${alignedLevels ? `SL TF: ${alignedLevels.stopTimeframe} | TP TF: ${alignedLevels.targetTimeframe} | ` : ""}` +
         `TP: ${tp} (${target.source}${target.timeframe ? ` ${target.timeframe}` : ""}) | RR: ${rr.toFixed(2)}`
     );
     return {
         type: setup.type,
-        label: `${setup.label} (1H breakout / ${alignedLevels?.stopTimeframe ?? "1H"} SL / ` +
-            `${alignedLevels?.targetTimeframe ?? "1H"} TP / 15m trigger)`,
+        label: `${setup.label} (1H breakout / levels / 15m trigger)`,
         pair: symbol,
         sl: stopLoss,
         tp,
         targetSource: target.source,
-        stopLossTF: alignedLevels?.stopTimeframe ?? "1H",
-        targetTF: alignedLevels?.targetTimeframe ?? "1H",
+        stopLossTF: "1H",
+        targetTF: "1H",
         entryPrice,
         structuralTF: "1H",
         breakoutTF: "15m",
@@ -218,7 +169,7 @@ function buildHourlyBreakoutPattern(symbol, setup, candle, breakoutLevel, minimu
         necklineHigh: setup.necklineHigh,
         necklineLow: setup.necklineLow,
         headTime: setup.headTime || Date.now(),
-        activeTFs: Object.keys(alignedStructures ?? { "1H": setup }),
+        activeTFs: ["1H"],
         timestamp: Date.now()
     };
 }
@@ -495,29 +446,21 @@ export function runDetection(
     }
 
     const activeTFs = Object.keys(detectedSetups);
-    const alignedSetups = Object.fromEntries(activeTFs.map(timeframe => [
-        timeframe,
-        getLevelSetupSnapshot(timeframe, detectedSetups[timeframe])
-    ]));
-    const alignedLevels = selectAlignedLevelSetups(activeTFs, alignedSetups);
-    for (const setup of Object.values(detectedSetups)) {
-        setup.alignedSetups = alignedSetups;
-    }
     const structuralTF = activeTFs.length > 1
         ? pickEarliestBreakoutTF(activeTFs, detectedSetups, candleData, breakoutBuffer)
         : activeTFs[0];
     const structuralSetup = detectedSetups[structuralTF];
-    const preferredStopLoss = alignedLevels.stopSetup.sl;
-    const preferredStopLossTF = alignedLevels.stopTimeframe;
-    const preferredTargetSetup = alignedLevels.targetSetup;
-    const preferredTargetTF = alignedLevels.targetTimeframe;
+    const stopLoss = structuralSetup.sl;
+    const stopLossTF = structuralTF;
+    const targetSetup = structuralSetup;
+    const targetTF = structuralTF;
     for (const [timeframe, setup] of Object.entries(detectedSetups)) {
         setup.structuralTF = timeframe;
     }
     if (activeTFs.length > 1) {
         console.log(
-            `[${symbol}] Multi-TF setup confirmed (${activeTFs.join(" + ")}); no timeframe is preferred. ` +
-            `Monitoring all accepted structures; the first neckline breakout across the set will trigger the trade.`
+            `[${symbol}] Multi-TF setup confirmed (${activeTFs.join(" + ")}); monitoring all accepted structures. ` +
+            `The first neckline breakout triggers a trade using that structure's own stop and target levels.`
         );
     }
     if (structuralTF !== "1H") {
@@ -531,9 +474,9 @@ export function runDetection(
         : "";
     console.log(
         `[${symbol}] Selected ${structuralTF} ${structuralSetup.type.toUpperCase()} structure for breakout; ` +
-        `SL from ${preferredStopLossTF}, TP from ${preferredTargetTF}${contextNote}. ` +
+        `using ${structuralTF} levels${contextNote}. ` +
         `Neckline ${structuralSetup.necklineStartPrice} → ${structuralSetup.necklineEndPrice}; ` +
-        `SL ${preferredStopLoss}; target measured move ${preferredTargetSetup.measuredMove}.`
+        `SL ${stopLoss}; measured move ${targetSetup.measuredMove}.`
     );
 
     if (expectedBias && structuralSetup.type !== expectedBias) {
@@ -746,22 +689,6 @@ export function runDetection(
         return rejectAndTryNextSetup("neckline-recrossed");
     }
 
-    const breakoutAlignedLevels = selectAlignedLevelSetups(
-        activeTFs,
-        alignedSetups,
-        lastClosedBreakout.time
-    );
-    if (!breakoutAlignedLevels) {
-        console.log(
-            `❌ [${symbol}] No aligned structure had a confirmed right shoulder by breakout time; ` +
-            `refusing to combine unformed timeframe levels.`
-        );
-        return rejectAndTryNextSetup("invalid-levels");
-    }
-    const stopLoss = breakoutAlignedLevels.stopSetup.sl;
-    const stopLossTF = breakoutAlignedLevels.stopTimeframe;
-    const targetSetup = breakoutAlignedLevels.targetSetup;
-    const targetTF = breakoutAlignedLevels.targetTimeframe;
     const entryPrice = lastClosedBreakout.close;
     const targetNecklineAtBreakout = getNecklineAtTime(
         targetSetup,
@@ -829,7 +756,7 @@ export function runDetection(
     reportPatternState("breakout-confirmed", lastClosedBreakout);
     console.log(
         `✅ [${symbol}] First ${breakoutTF} close beyond sloped neckline by ${breakoutBuffer} — Structure: ${activeTFs.join(" + ")} | ` +
-        `Breakout source: ${structuralTF} | SL source: ${stopLossTF} | TP source: ${targetTF} | ` +
+        `Breakout/SL/TP source: ${structuralTF} | ` +
         `Breakout TF: ${breakoutTF} | Entry: ${entryPrice} | ` +
         `SL: ${stopLoss} | TP: ${tp} (${target.source}${target.timeframe ? ` ${target.timeframe}` : ""}) | ` +
         `RR: ${rr.toFixed(2)}`

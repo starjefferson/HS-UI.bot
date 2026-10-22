@@ -450,11 +450,11 @@ function scheduleNextBreakoutMonitor() {
 // Startup Engine
 console.log("🚀 Starting Standalone MetaApi Head & Shoulders Trading Engine (HotForex / Smart Hourly Mode)...");
 
+scheduleNextBreakoutMonitor();
 runTradingCycle()
   .catch((err) => {
     console.error(`❌ [Startup] Initial scan cycle failed: ${err?.message || err}. Scheduler will retry on next hour.`);
   })
   .then(() => {
     scheduleNextHourlyScan();
-    scheduleNextBreakoutMonitor();
   });

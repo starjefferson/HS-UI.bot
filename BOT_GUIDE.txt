@@ -21,10 +21,9 @@ SCAN CYCLE
 2. Fetch W1, D1, H4, H1, and M15 candles for the structural scan.
 3. Require agreement from at least three of W1/D1/H4/H1 for a directional bias.
 4. Detect H&S structures on D1, H4, and H1. Reject conflicting directions.
-   If multiple same-direction structures qualify, use the smallest timeframe's
-   right shoulder for the stop and the largest timeframe's measured move for
-   the target; the first neckline breakout across the aligned structures
-   triggers the trade. Pattern pivots, invalidations,
+   If multiple same-direction structures qualify, the first neckline breakout
+   triggers the trade using that breakout structure's own right-shoulder stop
+   and measured-move target. Never mix levels across timeframes. Pattern pivots, invalidations,
    swing zones, stop levels, and historical stop/target checks use candle closes;
    intrabar wicks are ignored for strategy structure. Stops sit two configured
    pips beyond the right-shoulder close; breakout confirmation also uses its
@@ -47,11 +46,13 @@ SCAN CYCLE
 7. Before any order, refresh open positions and refuse execution if the account
    already has five or more open trades. A failed position query also blocks
    execution.
-8. Use the pattern's measured move from the breakout neckline as the take-profit
-   target whenever that target gives at least the configured minimum RR from
-   the actual entry and stop. Otherwise, set the target to exactly the minimum
-   RR using the actual entry and stop, so a delayed breakout entry still has a
-   valid target. Do not cap naturally qualifying measured-move targets.
+8. Calculate the pattern's take-profit at the confirmed breakout candle close.
+   Keep a natural measured-move target unchanged whenever it meets the
+   configured minimum RR. If the natural move is below the minimum, extend the
+   target to at least 2.2R (or the configured minimum if it is higher), using
+   the breakout close and stop. Keep that target fixed; before order placement,
+   reject execution if the live quote no longer meets the configured minimum RR.
+   Do not cap or buffer naturally qualifying measured-move targets.
    Higher-timeframe support/resistance zones do not override the pattern target. Apply
    pattern fingerprinting, risk/reward, trade-frequency, correlation, and
    gold-specific guards before order submission. Record successful trades in
