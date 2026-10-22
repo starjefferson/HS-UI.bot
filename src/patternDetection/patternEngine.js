@@ -8,6 +8,7 @@ const TIMEFRAME_MILLISECONDS = {
     "4H": 4 * 60 * 60 * 1000,
     "1D": 24 * 60 * 60 * 1000
 };
+const STRUCTURAL_TIMEFRAMES = ["1H", "4H", "1D"];
 
 // Breakout confirmation timeframe per structural timeframe.
 // 1H patterns use 15m candles; all higher-TF patterns continue to use 1H.
@@ -45,6 +46,38 @@ export function pauseHourlyStructureMonitoring(symbol) {
     if (setup?.monitoringState === "pending") {
         setup.monitoringState = "bias-unavailable";
     }
+}
+
+export function selectAlignedLevelSetups(activeTFs, detectedSetups, breakoutTime = Infinity) {
+    const timeframes = STRUCTURAL_TIMEFRAMES.filter(tf =>
+        activeTFs.includes(tf) &&
+        detectedSetups[tf] &&
+        (!Number.isFinite(detectedSetups[tf].rightShoulderTime) ||
+            detectedSetups[tf].rightShoulderTime <= breakoutTime)
+    );
+    if (timeframes.length === 0) return null;
+
+    const stopTimeframe = timeframes[0];
+    const targetTimeframe = timeframes.at(-1);
+    return {
+        stopTimeframe,
+        stopSetup: detectedSetups[stopTimeframe],
+        targetTimeframe,
+        targetSetup: detectedSetups[targetTimeframe]
+    };
+}
+
+function getLevelSetupSnapshot(timeframe, setup) {
+    return {
+        timeframe,
+        sl: setup.sl,
+        rightShoulderTime: setup.rightShoulderTime,
+        necklineStartTime: setup.necklineStartTime,
+        necklineEndTime: setup.necklineEndTime,
+        necklineStartPrice: setup.necklineStartPrice,
+        necklineEndPrice: setup.necklineEndPrice,
+        measuredMove: setup.measuredMove
+    };
 }
 
 export function checkPendingHourlyBreakout(symbol, closedCandles, breakoutBuffer, minimumRR) {
@@ -114,19 +147,33 @@ export function checkPendingHourlyBreakout(symbol, closedCandles, breakoutBuffer
 }
 
 function buildHourlyBreakoutPattern(symbol, setup, candle, breakoutLevel, minimumRR) {
+    const alignedStructures = setup.alignedSetups;
+    const alignedLevels = alignedStructures
+        ? selectAlignedLevelSetups(
+            Object.keys(alignedStructures),
+            alignedStructures,
+            candle.time
+        )
+        : null;
+    const stopLoss = alignedLevels?.stopSetup.sl ?? setup.sl;
+    const targetSetup = alignedLevels?.targetSetup ?? setup;
     const neckline = getNecklineAtTime(
-        setup,
+        targetSetup,
         candle.time + BREAKOUT_TF_MILLISECONDS["15m"]
     );
     const entryPrice = candle.close;
+    const breakoutNeckline = getNecklineAtTime(
+        setup,
+        candle.time + BREAKOUT_TF_MILLISECONDS["15m"]
+    );
     const measuredMoveTarget = setup.type === "sell"
-        ? neckline - setup.measuredMove
-        : neckline + setup.measuredMove;
-    const risk = setup.type === "sell" ? setup.sl - entryPrice : entryPrice - setup.sl;
+        ? neckline - targetSetup.measuredMove
+        : neckline + targetSetup.measuredMove;
+    const risk = setup.type === "sell" ? stopLoss - entryPrice : entryPrice - stopLoss;
     const target = selectTakeProfit({
         side: setup.type,
         entryPrice,
-        stopLoss: setup.sl,
+        stopLoss,
         measuredMoveTarget,
         minimumRR,
         onDiagnostic: diagnostic => logTargetDiagnostic(symbol, diagnostic)
@@ -138,7 +185,7 @@ function buildHourlyBreakoutPattern(symbol, setup, candle, breakoutLevel, minimu
     if (!(risk > 0) || !(reward > 0) || !Number.isFinite(rr) || rr < minimumRR) {
         console.log(
             `❌ [${symbol}] REJECTED: Pattern target does not meet minimum RR ${minimumRR} | ` +
-            `Entry: ${entryPrice} | SL: ${setup.sl} | Measured move: ${measuredMoveTarget} | Risk: ${risk}`
+            `Entry: ${entryPrice} | SL: ${stopLoss} | Measured move: ${measuredMoveTarget} | Risk: ${risk}`
         );
         return null;
     }
@@ -147,16 +194,21 @@ function buildHourlyBreakoutPattern(symbol, setup, candle, breakoutLevel, minimu
     console.log(
         `✅ [${symbol}] 15m candle crossed the neckline — Structure: 1H | ` +
         `Candle: ${new Date(candle.time).toISOString()} | Entry: ${entryPrice} | ` +
-        `Neckline: ${neckline} | Threshold: ${breakoutLevel} | SL: ${setup.sl} | ` +
+        `Breakout neckline: ${breakoutNeckline} | TP neckline: ${neckline} | ` +
+        `Threshold: ${breakoutLevel} | SL: ${stopLoss} | ` +
+        `${alignedLevels ? `SL TF: ${alignedLevels.stopTimeframe} | TP TF: ${alignedLevels.targetTimeframe} | ` : ""}` +
         `TP: ${tp} (${target.source}${target.timeframe ? ` ${target.timeframe}` : ""}) | RR: ${rr.toFixed(2)}`
     );
     return {
         type: setup.type,
-        label: `${setup.label} (1H levels / 15m trigger)`,
+        label: `${setup.label} (1H breakout / ${alignedLevels?.stopTimeframe ?? "1H"} SL / ` +
+            `${alignedLevels?.targetTimeframe ?? "1H"} TP / 15m trigger)`,
         pair: symbol,
-        sl: setup.sl,
+        sl: stopLoss,
         tp,
         targetSource: target.source,
+        stopLossTF: alignedLevels?.stopTimeframe ?? "1H",
+        targetTF: alignedLevels?.targetTimeframe ?? "1H",
         entryPrice,
         structuralTF: "1H",
         breakoutTF: "15m",
@@ -166,7 +218,7 @@ function buildHourlyBreakoutPattern(symbol, setup, candle, breakoutLevel, minimu
         necklineHigh: setup.necklineHigh,
         necklineLow: setup.necklineLow,
         headTime: setup.headTime || Date.now(),
-        activeTFs: ["1H"],
+        activeTFs: Object.keys(alignedStructures ?? { "1H": setup }),
         timestamp: Date.now()
     };
 }
@@ -443,10 +495,22 @@ export function runDetection(
     }
 
     const activeTFs = Object.keys(detectedSetups);
+    const alignedSetups = Object.fromEntries(activeTFs.map(timeframe => [
+        timeframe,
+        getLevelSetupSnapshot(timeframe, detectedSetups[timeframe])
+    ]));
+    const alignedLevels = selectAlignedLevelSetups(activeTFs, alignedSetups);
+    for (const setup of Object.values(detectedSetups)) {
+        setup.alignedSetups = alignedSetups;
+    }
     const structuralTF = activeTFs.length > 1
         ? pickEarliestBreakoutTF(activeTFs, detectedSetups, candleData, breakoutBuffer)
         : activeTFs[0];
     const structuralSetup = detectedSetups[structuralTF];
+    const preferredStopLoss = alignedLevels.stopSetup.sl;
+    const preferredStopLossTF = alignedLevels.stopTimeframe;
+    const preferredTargetSetup = alignedLevels.targetSetup;
+    const preferredTargetTF = alignedLevels.targetTimeframe;
     for (const [timeframe, setup] of Object.entries(detectedSetups)) {
         setup.structuralTF = timeframe;
     }
@@ -466,9 +530,10 @@ export function runDetection(
         ? `; monitoring ${activeTFs.join(" + ")}; first neckline break wins`
         : "";
     console.log(
-        `[${symbol}] Selected ${structuralTF} ${structuralSetup.type.toUpperCase()} structure for entry/SL/TP levels${contextNote}. ` +
+        `[${symbol}] Selected ${structuralTF} ${structuralSetup.type.toUpperCase()} structure for breakout; ` +
+        `SL from ${preferredStopLossTF}, TP from ${preferredTargetTF}${contextNote}. ` +
         `Neckline ${structuralSetup.necklineStartPrice} → ${structuralSetup.necklineEndPrice}; ` +
-        `SL ${structuralSetup.sl}; measured move ${structuralSetup.measuredMove}.`
+        `SL ${preferredStopLoss}; target measured move ${preferredTargetSetup.measuredMove}.`
     );
 
     if (expectedBias && structuralSetup.type !== expectedBias) {
@@ -681,26 +746,42 @@ export function runDetection(
         return rejectAndTryNextSetup("neckline-recrossed");
     }
 
+    const breakoutAlignedLevels = selectAlignedLevelSetups(
+        activeTFs,
+        alignedSetups,
+        lastClosedBreakout.time
+    );
+    if (!breakoutAlignedLevels) {
+        console.log(
+            `❌ [${symbol}] No aligned structure had a confirmed right shoulder by breakout time; ` +
+            `refusing to combine unformed timeframe levels.`
+        );
+        return rejectAndTryNextSetup("invalid-levels");
+    }
+    const stopLoss = breakoutAlignedLevels.stopSetup.sl;
+    const stopLossTF = breakoutAlignedLevels.stopTimeframe;
+    const targetSetup = breakoutAlignedLevels.targetSetup;
+    const targetTF = breakoutAlignedLevels.targetTimeframe;
     const entryPrice = lastClosedBreakout.close;
-    const necklineAtBreakout = getNecklineAtTime(
-        structuralSetup,
+    const targetNecklineAtBreakout = getNecklineAtTime(
+        targetSetup,
         lastClosedBreakout.time + breakoutTFMs
     );
     const measuredMoveTarget = structuralSetup.type === "sell"
-        ? necklineAtBreakout - structuralSetup.measuredMove
-        : necklineAtBreakout + structuralSetup.measuredMove;
+        ? targetNecklineAtBreakout - targetSetup.measuredMove
+        : targetNecklineAtBreakout + targetSetup.measuredMove;
     const target = selectTakeProfit({
         side: structuralSetup.type,
         entryPrice,
-        stopLoss: structuralSetup.sl,
+        stopLoss,
         measuredMoveTarget,
         minimumRR,
         onDiagnostic: diagnostic => logTargetDiagnostic(symbol, diagnostic)
     });
     const tp = target?.tp;
     const risk = structuralSetup.type === "sell"
-        ? structuralSetup.sl - entryPrice
-        : entryPrice - structuralSetup.sl;
+        ? stopLoss - entryPrice
+        : entryPrice - stopLoss;
     const reward = structuralSetup.type === "sell"
         ? entryPrice - tp
         : tp - entryPrice;
@@ -709,7 +790,7 @@ export function runDetection(
     if (!(risk > 0) || !(reward > 0) || !Number.isFinite(rr) || rr < minimumRR) {
         console.log(
             `❌ [${symbol}] REJECTED: No valid target with minimum RR ${minimumRR} | ` +
-            `Entry: ${entryPrice} | SL: ${structuralSetup.sl} | ` +
+            `Entry: ${entryPrice} | SL: ${stopLoss} (${stopLossTF}) | ` +
             `Measured move: ${measuredMoveTarget} | Risk: ${risk}`
         );
         return rejectAndTryNextSetup(risk > 0 ? "rr-rejected" : "invalid-levels");
@@ -717,15 +798,15 @@ export function runDetection(
 
     const slBreached = candlesSinceBreakout.find(candle =>
         structuralSetup.type === "sell"
-            ? candle.close >= structuralSetup.sl
-            : candle.close <= structuralSetup.sl
+            ? candle.close >= stopLoss
+            : candle.close <= stopLoss
     );
     if (slBreached) {
         console.log(
             `❌ [${symbol}] REJECTED: Stop loss was breached after breakout | ` +
             `Candle: ${new Date(slBreached.time).toISOString()} | ` +
             `Breach close: ${slBreached.close} | ` +
-            `SL: ${structuralSetup.sl}`
+            `SL: ${stopLoss} (${stopLossTF})`
         );
         return rejectAndTryNextSetup("invalid-levels");
     }
@@ -748,18 +829,21 @@ export function runDetection(
     reportPatternState("breakout-confirmed", lastClosedBreakout);
     console.log(
         `✅ [${symbol}] First ${breakoutTF} close beyond sloped neckline by ${breakoutBuffer} — Structure: ${activeTFs.join(" + ")} | ` +
-        `Entry/SL/TP source: ${structuralTF} | Breakout TF: ${breakoutTF} | Entry: ${entryPrice} | ` +
-        `SL: ${structuralSetup.sl} | TP: ${tp} (${target.source}${target.timeframe ? ` ${target.timeframe}` : ""}) | ` +
+        `Breakout source: ${structuralTF} | SL source: ${stopLossTF} | TP source: ${targetTF} | ` +
+        `Breakout TF: ${breakoutTF} | Entry: ${entryPrice} | ` +
+        `SL: ${stopLoss} | TP: ${tp} (${target.source}${target.timeframe ? ` ${target.timeframe}` : ""}) | ` +
         `RR: ${rr.toFixed(2)}`
     );
 
     return {
         type:         structuralSetup.type,
-        label:        `${structuralSetup.label} (${structuralTF} levels / ${breakoutTF} trigger)`,
+        label:        `${structuralSetup.label} (${structuralTF} breakout / ${stopLossTF} SL / ${targetTF} TP)`,
         pair:         symbol,
-        sl:           structuralSetup.sl,
+        sl:           stopLoss,
         tp,
         targetSource: target.source,
+        stopLossTF,
+        targetTF,
         entryPrice,
         structuralTF,
         breakoutTF,

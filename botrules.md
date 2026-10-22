@@ -13,8 +13,10 @@
   to establish directional bias.
 - H&S and inverse H&S structures are scanned on D1, H4, and H1.
 - Conflicting pattern directions across accepted timeframes reject the setup.
-- When multiple same-direction patterns are accepted, level ownership is
-  prioritized D1 > H4 > H1. The other structures are context only.
+- When multiple same-direction patterns are accepted, the smallest timeframe
+  supplies the right-shoulder stop and the largest supplies the measured-move
+  target. The first neckline breakout across the aligned structures triggers
+  the trade.
 - Breakout confirmation uses H1 candles for D1/H4 structures and M15 candles
   for H1 structures.
 - Before order placement the bot applies pattern fingerprinting, minimum RR,

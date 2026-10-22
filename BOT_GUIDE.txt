@@ -21,8 +21,10 @@ SCAN CYCLE
 2. Fetch W1, D1, H4, H1, and M15 candles for the structural scan.
 3. Require agreement from at least three of W1/D1/H4/H1 for a directional bias.
 4. Detect H&S structures on D1, H4, and H1. Reject conflicting directions.
-   If multiple same-direction structures qualify, use D1 levels first, then H4,
-   then H1; the other structures provide context. Pattern pivots, invalidations,
+   If multiple same-direction structures qualify, use the smallest timeframe's
+   right shoulder for the stop and the largest timeframe's measured move for
+   the target; the first neckline breakout across the aligned structures
+   triggers the trade. Pattern pivots, invalidations,
    swing zones, stop levels, and historical stop/target checks use candle closes;
    intrabar wicks are ignored for strategy structure. Stops sit two configured
    pips beyond the right-shoulder close; breakout confirmation also uses its

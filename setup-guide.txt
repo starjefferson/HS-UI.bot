@@ -73,7 +73,9 @@ TRADING AND MONITORING
   the environment, subject to startup validation.
 - Trend alignment is checked on W1, D1, H4, and H1. Structural patterns are
   checked on D1, H4, and H1. When multiple same-direction patterns qualify,
-  level ownership priority is D1 > H4 > H1. Conflicting directions are rejected.
+  the smallest timeframe supplies the right-shoulder stop and the largest
+  supplies the measured-move target; the first neckline breakout triggers the
+  trade. Conflicting directions are rejected.
 - H1 structures use M15 candles for breakout confirmation; D1/H4 structures
   use H1 candles.
 - Review scan output and verify the selected account, symbols, and position
