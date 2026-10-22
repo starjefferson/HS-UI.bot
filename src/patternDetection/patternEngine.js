@@ -47,7 +47,7 @@ export function pauseHourlyStructureMonitoring(symbol) {
     }
 }
 
-export function checkPendingHourlyBreakout(symbol, closedCandles, breakoutBuffer, minimumRR, maximumRR = 4) {
+export function checkPendingHourlyBreakout(symbol, closedCandles, breakoutBuffer, minimumRR) {
     const setup = trackedStructures.get(`${symbol}:1H`);
     if (!setup || setup.monitoringState !== "pending") return null;
 
@@ -78,7 +78,7 @@ export function checkPendingHourlyBreakout(symbol, closedCandles, breakoutBuffer
         setup.firstBreakoutTime ??= pending.time;
         const level = getBreakoutLevel(setup, pending.time + breakoutTFMs, breakoutBuffer);
         const pattern = buildHourlyBreakoutPattern(
-            symbol, setup, pending, level, breakoutBuffer, minimumRR, maximumRR
+            symbol, setup, pending, level, minimumRR
         );
         return pattern;
     }
@@ -101,7 +101,7 @@ export function checkPendingHourlyBreakout(symbol, closedCandles, breakoutBuffer
                 previousCandle = candle;
                 setup.firstBreakoutTime ??= candle.time;
                 const pattern = buildHourlyBreakoutPattern(
-                    symbol, setup, candle, level, breakoutBuffer, minimumRR, maximumRR
+                    symbol, setup, candle, level, minimumRR
                 );
                 if (pattern) return pattern;
                 continue;
@@ -113,7 +113,7 @@ export function checkPendingHourlyBreakout(symbol, closedCandles, breakoutBuffer
     return null;
 }
 
-function buildHourlyBreakoutPattern(symbol, setup, candle, breakoutLevel, breakoutBuffer, minimumRR, maximumRR) {
+function buildHourlyBreakoutPattern(symbol, setup, candle, breakoutLevel, minimumRR) {
     const neckline = getNecklineAtTime(
         setup,
         candle.time + BREAKOUT_TF_MILLISECONDS["15m"]
@@ -128,9 +128,7 @@ function buildHourlyBreakoutPattern(symbol, setup, candle, breakoutLevel, breako
         entryPrice,
         stopLoss: setup.sl,
         measuredMoveTarget,
-        plannedEntryPrice: breakoutLevel,
         minimumRR,
-        maximumRR,
         onDiagnostic: diagnostic => logTargetDiagnostic(symbol, diagnostic)
     });
     const tp = target?.tp;
@@ -139,7 +137,7 @@ function buildHourlyBreakoutPattern(symbol, setup, candle, breakoutLevel, breako
 
     if (!(risk > 0) || !(reward > 0) || !Number.isFinite(rr) || rr < minimumRR) {
         console.log(
-            `❌ [${symbol}] REJECTED: Pattern measured move does not meet RR ${minimumRR}-${maximumRR} | ` +
+            `❌ [${symbol}] REJECTED: Pattern target does not meet minimum RR ${minimumRR} | ` +
             `Entry: ${entryPrice} | SL: ${setup.sl} | Measured move: ${measuredMoveTarget} | Risk: ${risk}`
         );
         return null;
@@ -201,7 +199,6 @@ export function runDetection(
     {
         breakoutBuffer = getPipSize(symbol) * 2,
         minimumRR = 2,
-        maximumRR = 4,
         deferHourlyBreakouts = false,
         excludedStructuralTFs = []
     } = {}
@@ -554,7 +551,6 @@ export function runDetection(
             {
                 breakoutBuffer,
                 minimumRR,
-                maximumRR,
                 deferHourlyBreakouts,
                 excludedStructuralTFs: nextExcludedTFs
             }
@@ -698,9 +694,7 @@ export function runDetection(
         entryPrice,
         stopLoss: structuralSetup.sl,
         measuredMoveTarget,
-        plannedEntryPrice: breakoutLevel,
         minimumRR,
-        maximumRR,
         onDiagnostic: diagnostic => logTargetDiagnostic(symbol, diagnostic)
     });
     const tp = target?.tp;

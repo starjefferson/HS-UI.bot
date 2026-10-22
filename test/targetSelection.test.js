@@ -6,19 +6,17 @@ const defaults = {
     side: "buy",
     entryPrice: 100,
     stopLoss: 95,
-    minimumRR: 2,
-    maximumRR: 4
+    minimumRR: 2
 };
 
-test("uses the measured move when planned reward-to-risk is within the configured range", () => {
+test("uses the natural measured move when it meets the minimum RR", () => {
     const target = selectTakeProfit({
         ...defaults,
         side: "sell",
         entryPrice: 100,
         stopLoss: 105,
         measuredMoveTarget: 87,
-        minimumRR: 2,
-        maximumRR: 4
+        minimumRR: 2
     });
 
     assert.equal(target.source, "measured move");
@@ -27,7 +25,7 @@ test("uses the measured move when planned reward-to-risk is within the configure
     assert.equal(target.actualRR, 2.6);
 });
 
-test("caps buy and sell measured moves at four times the risk", () => {
+test("keeps natural measured moves above four times the risk unchanged", () => {
     const buyTarget = selectTakeProfit({
         ...defaults,
         measuredMoveTarget: 125
@@ -40,13 +38,13 @@ test("caps buy and sell measured moves at four times the risk", () => {
         measuredMoveTarget: 90
     });
 
-    assert.equal(buyTarget.tp, 120);
-    assert.equal(buyTarget.rr, 4);
-    assert.equal(sellTarget.tp, 92);
-    assert.equal(sellTarget.rr, 4);
+    assert.equal(buyTarget.tp, 125);
+    assert.equal(buyTarget.rr, 5);
+    assert.equal(sellTarget.tp, 90);
+    assert.equal(sellTarget.rr, 5);
 });
 
-test("extends planned measured moves below 2R to the planned 2R minimum", () => {
+test("sets buy and sell targets below 2R to 2R from the actual entry", () => {
     const buyTarget = selectTakeProfit({
         ...defaults,
         measuredMoveTarget: 109
@@ -65,30 +63,52 @@ test("extends planned measured moves below 2R to the planned 2R minimum", () => 
     assert.equal(sellTarget.rr, 2);
 });
 
-test("does not re-buffer a planned target above 2R when the actual entry is delayed", () => {
+test("moves a naturally sub-2R delayed-entry target to 2R from the actual entry", () => {
     const target = selectTakeProfit({
         ...defaults,
         entryPrice: 105,
-        measuredMoveTarget: 115,
-        plannedEntryPrice: 100
+        measuredMoveTarget: 115
     });
 
-    assert.equal(target.tp, 115);
-    assert.equal(target.rr, 3);
-    assert.equal(target.actualRR, 1);
+    assert.equal(target.tp, 125);
+    assert.equal(target.rr, 2);
+    assert.equal(target.actualRR, 2);
 });
 
-test("buffers from the planned entry and reports reduced RR at a delayed actual entry", () => {
+test("extends the USDCHF example to a full 2R from its actual breakout entry", () => {
+    const target = selectTakeProfit({
+        side: "sell",
+        entryPrice: 0.82313,
+        stopLoss: 0.82619,
+        measuredMoveTarget: 0.820145,
+        minimumRR: 2
+    });
+
+    assert.ok(Math.abs(target.tp - 0.81701) < 1e-12);
+    assert.ok(Math.abs(target.actualRR - 2) < 1e-12);
+});
+
+test("keeps a natural target that meets 2R at the actual entry unchanged", () => {
     const target = selectTakeProfit({
         ...defaults,
         entryPrice: 102,
-        measuredMoveTarget: 108,
-        plannedEntryPrice: 100
+        measuredMoveTarget: 116
     });
 
-    assert.equal(target.tp, 110);
+    assert.equal(target.tp, 116);
     assert.equal(target.rr, 2);
-    assert.equal(target.actualRR, 8 / 7);
+    assert.equal(target.actualRR, 2);
+});
+
+test("uses the natural target when actual-entry RR is above the minimum", () => {
+    const target = selectTakeProfit({
+        ...defaults,
+        entryPrice: 102,
+        measuredMoveTarget: 123
+    });
+
+    assert.equal(target.tp, 123);
+    assert.equal(target.rr, 3);
 });
 
 test("leaves measured moves at or above the minimum unchanged", () => {
@@ -108,11 +128,10 @@ test("rejects invalid entry, stop, or target geometry", () => {
     assert.equal(selectTakeProfit({
         ...defaults,
         measuredMoveTarget: 115,
-        plannedEntryPrice: 90
+        stopLoss: 101
     }), null);
     assert.equal(selectTakeProfit({
         ...defaults,
-        stopLoss: 101,
-        measuredMoveTarget: 115
+        measuredMoveTarget: NaN
     }), null);
 });

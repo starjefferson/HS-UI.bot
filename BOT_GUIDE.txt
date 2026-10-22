@@ -46,11 +46,11 @@ SCAN CYCLE
    already has five or more open trades. A failed position query also blocks
    execution.
 8. Use the pattern's measured move from the breakout neckline as the take-profit
-   target. Calculate any 2R minimum extension and 4R cap using the planned
-   breakout-threshold entry, not a later entry price. Require at least 2R from
-   the actual entry (including the live quote); skip a delayed entry if it no
-   longer meets that minimum. Higher-timeframe support/resistance zones do not
-   override the pattern target. Apply
+   target whenever that target gives at least the configured minimum RR from
+   the actual entry and stop. Otherwise, set the target to exactly the minimum
+   RR using the actual entry and stop, so a delayed breakout entry still has a
+   valid target. Do not cap naturally qualifying measured-move targets.
+   Higher-timeframe support/resistance zones do not override the pattern target. Apply
    pattern fingerprinting, risk/reward, trade-frequency, correlation, and
    gold-specific guards before order submission. Record successful trades in
    `history.json`.
