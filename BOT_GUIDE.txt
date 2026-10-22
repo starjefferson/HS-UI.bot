@@ -29,9 +29,8 @@ SCAN CYCLE
    pips beyond the right-shoulder close; breakout confirmation also uses its
    configured two-pip neckline buffer. If a preferred timeframe setup is
    rejected after locking (for example, invalid RR or missed breakout history),
-   try the next available same-direction timeframe setup. Lower-timeframe
-   structures remain held while a higher-timeframe setup is only waiting for
-   breakout confirmation.
+   try the next available same-direction timeframe setup.    Same-direction structures on different timeframes are monitored concurrently;
+   the first confirmed neckline break uses only that structure's own levels.
    Filter loose geometry: shoulder variation may not exceed 3.5 ATR; head
    prominence must be at least 0.6 ATR and head-to-neckline depth at least
    1.1 ATR. Retain up to 4 ATR of neckline slope for valid sloped structures.

@@ -463,12 +463,6 @@ export function runDetection(
             `The first neckline breakout triggers a trade using that structure's own stop and target levels.`
         );
     }
-    if (structuralTF !== "1H") {
-        const hourlySetup = trackedStructures.get(`${symbol}:1H`);
-        if (hourlySetup?.monitoringState === "pending") {
-            hourlySetup.monitoringState = "higher-timeframe-pending";
-        }
-    }
     const contextNote = activeTFs.length > 1
         ? `; monitoring ${activeTFs.join(" + ")}; first neckline break wins`
         : "";

@@ -74,8 +74,9 @@ TRADING AND MONITORING
 - Trend alignment is checked on W1, D1, H4, and H1. Structural patterns are
   checked on D1, H4, and H1. When multiple same-direction patterns qualify,
   the first neckline breakout triggers the trade using that timeframe's own
-  right-shoulder stop and measured-move target. Levels are not mixed across
-  timeframes. Conflicting directions are rejected.
+  right-shoulder stop and measured-move target. Accepted timeframes are
+  monitored concurrently and levels are not mixed across timeframes.
+  Conflicting directions are rejected.
 - H1 structures use M15 candles for breakout confirmation; D1/H4 structures
   use H1 candles.
 - Take-profit is calculated from the confirmed breakout candle close. Natural

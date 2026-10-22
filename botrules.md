@@ -16,7 +16,8 @@
 - When multiple same-direction patterns are accepted, the first neckline
   breakout triggers the trade using that breakout structure's own
   right-shoulder stop and measured-move target. Do not mix levels across
-  timeframes.
+  timeframes. Monitor accepted timeframes concurrently rather than pausing a
+  lower-timeframe setup while a higher-timeframe setup waits for a break.
 - Breakout confirmation uses H1 candles for D1/H4 structures and M15 candles
   for H1 structures.
 - Calculate take-profit from the confirmed breakout candle close. Keep natural
