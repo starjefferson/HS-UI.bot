@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { hasNecklineRecrossAfterBreakout } from "../src/patternDetection/patternEngine.js";
+import { calculateADX } from "../src/patternDetection/utils.js";
 
 const flatNeckline = type => ({
     type,
@@ -44,4 +45,30 @@ test("invalidates a sell setup after a close back above the neckline", () => {
         100,
         0
     ), true);
+});
+
+test("correctly calculates ADX and identifies trending vs consolidating candles", () => {
+    // Flat consolidating candles (no directional movement)
+    const flatCandles = Array.from({ length: 50 }, (_, i) => ({
+        time: i,
+        open: 100 + (i % 2 === 0 ? 0.2 : -0.2),
+        high: 100.5,
+        low: 99.5,
+        close: 100 + (i % 2 === 0 ? -0.2 : 0.2)
+    })).reverse();
+    const lowAdx = calculateADX(flatCandles);
+    assert.ok(Number.isFinite(lowAdx));
+    assert.ok(lowAdx < 20);
+
+    // Strongly trending candles
+    const trendingCandles = Array.from({ length: 50 }, (_, i) => ({
+        time: i,
+        open: 100 + i * 2,
+        high: 102 + i * 2,
+        low: 99.5 + i * 2,
+        close: 101.5 + i * 2
+    })).reverse();
+    const highAdx = calculateADX(trendingCandles);
+    assert.ok(Number.isFinite(highAdx));
+    assert.ok(highAdx > 25);
 });

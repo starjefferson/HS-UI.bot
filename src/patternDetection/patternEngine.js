@@ -1,5 +1,6 @@
 import { detectPatterns } from "./headShoulders.js";
 import { selectTakeProfit } from "./targetSelection.js";
+import { calculateADX } from "./utils.js";
 
 const trackedStructures = new Map();
 const STRUCTURE_MAX_AGE_CANDLES = 168;
@@ -222,6 +223,14 @@ export function runDetection(
             console.log(
                 `⚠️ [${symbol}] ${tf} structure scan skipped: ` +
                 `${candles?.length ?? 0} candles available; 200 required.`
+            );
+            continue;
+        }
+
+        const adxValue = calculateADX(candles);
+        if (Number.isFinite(adxValue) && adxValue < 20) {
+            console.log(
+                `⚠️ [${symbol}] ${tf} structure scan skipped: ADX ${adxValue.toFixed(1)} is below 20 — market is consolidating.`
             );
             continue;
         }
