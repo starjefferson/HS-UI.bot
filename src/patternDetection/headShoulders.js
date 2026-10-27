@@ -92,9 +92,9 @@ function findHS(candles, type, onDiagnostic, stopBuffer) {
 
         // Allow visibly uneven shoulders and sloped necklines while still
         // rejecting shapes whose pivot levels are too far apart.
-        if (shoulderDifference > atr * 3.5) continue;
+        if (shoulderDifference > atr * 2.8) continue;
         if (necklineDifference > atr * 4) continue;
-        if (headProminence < atr * 0.6 || headToNeckline < atr * 1.1) continue;
+        if (headProminence < atr * 0.75 || headToNeckline < atr * 1.1) continue;
 
         const headTime = candles?.[head.idx]?.time ?? head.idx;
         const leftShoulderTime = candles?.[leftShoulder.idx]?.time;

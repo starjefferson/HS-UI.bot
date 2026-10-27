@@ -120,14 +120,6 @@ async function executePatternTrade({ symbol, pattern, history, balance, currentP
     return null;
   }
 
-  const nowMs = Date.now();
-  const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
-  const tradesThisWeek = history.filter(h => (nowMs - new Date(h.executionTime).getTime()) < oneWeekMs);
-  if (tradesThisWeek.length >= 10) {
-    console.log(`❌ [${symbol}] REJECTED: Weekly trade limit reached | Trades: ${tradesThisWeek.length} | Required: <10`);
-    return null;
-  }
-
   if (goldGuard.isGoldSymbol(symbol)) {
     try {
       const priceInfo = await getSymbolPrice(symbol);
