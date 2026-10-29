@@ -212,8 +212,8 @@ export function runDetection(
         return null;
     }
 
-    // ── 1. Structural detection on 1D, 4H and 1H ─────────────────────────────
-    const structuralTFs = ["1D", "4H", "1H"];
+    // ── 1. Structural detection on 1D and 4H ─────────────────────────────────
+    const structuralTFs = ["1D", "4H"];
     let detectedSetups  = {};
 
     for (const tf of structuralTFs) {
